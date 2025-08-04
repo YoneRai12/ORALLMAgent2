@@ -1,10 +1,16 @@
-"""Browser session manager with screenshot streaming."""
+"""Browser session manager with screenshot streaming.
+
+Provides JPEG frames over an asyncio queue which can be consumed by a
+WebSocket handler. The same frames are written to an ``ffmpeg`` subprocess in
+MJPEG format so that an HLS stream can be produced for Safari/iOS clients.
+"""
 from __future__ import annotations
 
 import asyncio
-import base64
+import os
 import time
 import random
+import contextlib
 from pathlib import Path
 from typing import Optional
 
@@ -36,7 +42,7 @@ class BrowserSession:
         self.user_data_dir = self.save_dir / "user_data"
         # Each connected client receives frames through its own queue so that
         # screenshots can be broadcast to multiple viewers simultaneously.
-        self.queues: list[asyncio.Queue[str]] = []
+        self.queues: list[asyncio.Queue[bytes]] = []
         self._pause = asyncio.Event()
         self._pause.set()
         self._playwright = None
@@ -46,6 +52,11 @@ class BrowserSession:
         self._context = None
         self.logger = logger
         self._capture_task: asyncio.Task | None = None
+        # ffmpeg process for HLS conversion
+        self._ffmpeg: asyncio.subprocess.Process | None = None
+        self.stream_fps = int(os.getenv("STREAM_FPS", "12"))
+        self.png_quality = int(os.getenv("PNG_QUALITY", "70"))
+        self.max_viewers = int(os.getenv("MAX_VIEWERS", "6"))
 
     async def start(self, url: str = "about:blank") -> None:
         """Launch a browser and navigate to ``url``."""
@@ -62,6 +73,31 @@ class BrowserSession:
             self.logger.log("browser_start", {"url": url})
         # store context for closing and get video later
         self._context = context
+        # ffmpeg process for HLS output
+        hls_path = self.save_dir / "master.m3u8"
+        segment = os.getenv("HLS_SEGMENT_TIME", "4")
+        self._ffmpeg = await asyncio.create_subprocess_exec(
+            "ffmpeg",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "mjpeg",
+            "-i",
+            "-",
+            "-c:v",
+            "libx264",
+            "-f",
+            "hls",
+            "-hls_time",
+            segment,
+            "-hls_list_size",
+            "5",
+            str(hls_path),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
         self._capture_task = asyncio.create_task(self._capture_loop())
 
     async def goto(self, url: str) -> None:
@@ -102,14 +138,20 @@ class BrowserSession:
         """Capture a single frame to disk and broadcast it."""
 
         assert self.page is not None
-        path = self.frames_dir / f"{int(time.time()*1000)}.png"
-        await self.page.screenshot(path=str(path))
+        frame_bytes = await self.page.screenshot(type="jpeg", quality=self.png_quality)
+        path = self.frames_dir / f"{int(time.time()*1000)}.jpg"
+        with path.open("wb") as f:
+            f.write(frame_bytes)
         if self.logger:
             self.logger.log("frame", {"path": str(path)})
-        with path.open("rb") as f:
-            b64 = base64.b64encode(f.read()).decode()
         for q in list(self.queues):
-            await q.put(b64)
+            await q.put(frame_bytes)
+        if self._ffmpeg and self._ffmpeg.stdin:
+            try:
+                self._ffmpeg.stdin.write(frame_bytes)
+                await self._ffmpeg.stdin.drain()
+            except Exception:
+                pass
 
     async def _capture_loop(self) -> None:
         """Continuously capture frames for streaming."""
@@ -117,19 +159,21 @@ class BrowserSession:
         while True:
             await self._wait_if_paused()
             await self._capture_once()
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1 / self.stream_fps)
 
     async def _human_delay(self, min_delay: float = 0.1, max_delay: float = 0.3) -> None:
         """Sleep for a randomised short interval to mimic human behaviour."""
         await asyncio.sleep(random.uniform(min_delay, max_delay))
 
-    def register(self) -> asyncio.Queue[str]:
+    def register(self) -> asyncio.Queue[bytes] | None:
         """Register a new consumer queue for streaming screenshots."""
-        q: asyncio.Queue[str] = asyncio.Queue()
+        if len(self.queues) >= self.max_viewers:
+            return None
+        q: asyncio.Queue[bytes] = asyncio.Queue()
         self.queues.append(q)
         return q
 
-    def unregister(self, q: asyncio.Queue[str]) -> None:
+    def unregister(self, q: asyncio.Queue[bytes]) -> None:
         """Remove a previously registered consumer queue."""
         try:
             self.queues.remove(q)
@@ -162,3 +206,7 @@ class BrowserSession:
             await self.browser.close()
         if self._playwright is not None:
             await self._playwright.stop()
+        if self._ffmpeg is not None and self._ffmpeg.stdin:
+            self._ffmpeg.stdin.close()
+            with contextlib.suppress(Exception):
+                await self._ffmpeg.wait()

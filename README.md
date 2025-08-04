@@ -84,6 +84,7 @@ python main.py "write a haiku about the sky"
    };
    ```
    A minimal viewer is provided at `dashboard/viewer.html`.
+   Safari/iOS clients automatically switch to HLS `/stream/<session_id>/master.m3u8`.
 4. Control session / セッション制御:
    ```bash
    curl -X POST http://localhost:8001/sessions/<session_id>/browser/command \
@@ -109,6 +110,17 @@ curl -OJ -H "Authorization: Bearer <ACCESS_TOKEN>" \
 curl -OJ -H "Authorization: Bearer <ACCESS_TOKEN>" \
      http://localhost:8001/sessions/<session_id>/browser/video
 ```
+### Performance knobs / パフォーマンス調整
+- `STREAM_FPS` – Frame rate for capture (default 12) / キャプチャのフレームレート（既定12fps）
+- `PNG_QUALITY` – JPEG quality 0-100 (default 70) / JPEG画質0-100（既定70）
+- `MAX_VIEWERS` – Max simultaneous viewers (default 6) / 同時視聴者数の上限（既定6）
+- `HLS_SEGMENT_TIME` – HLS segment length in seconds (default 4) / HLSセグメント長(秒)（既定4）
+
+### 5. Run tests / テスト実行
+```bash
+pytest -q
+```
+
 
 
 ## 🔴 Manus Mode / マヌスモード
@@ -256,3 +268,8 @@ ws.resume()
 
 ## License / ライセンス
 MIT License
+
+## Changelog / 変更履歴
+### 0.9.0 – first public preview / 初の公開プレビュー
+- HLS fallback streaming and ffmpeg-based recording
+- E2E tests, security hardening, performance knobs

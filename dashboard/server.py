@@ -1,8 +1,6 @@
 """FastAPI router for dashboard placeholder."""
 from __future__ import annotations
 
-import base64
-
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 dashboard_router = APIRouter()
@@ -27,7 +25,7 @@ async def dashboard_index() -> dict:
 
 @dashboard_router.websocket("/ws/stream/{session_id}")
 async def stream_screen(websocket: WebSocket, session_id: str) -> None:
-    """Broadcast PNG frames of a session to WebSocket clients."""
+    """Broadcast JPEG frames of a session to WebSocket clients."""
 
     sessions = _state.get("sessions")
     if sessions is None:
@@ -39,10 +37,13 @@ async def stream_screen(websocket: WebSocket, session_id: str) -> None:
         return
     await websocket.accept()
     queue = session.browser.register()
+    if queue is None:
+        await websocket.close()
+        return
     try:
         while True:
-            b64 = await queue.get()
-            await websocket.send_bytes(base64.b64decode(b64))
+            frame = await queue.get()
+            await websocket.send_bytes(frame)
     except WebSocketDisconnect:
         pass
     finally:

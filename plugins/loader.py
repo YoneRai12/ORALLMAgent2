@@ -9,6 +9,7 @@ the application state and may register routes, tools, or background tasks.
 
 import importlib
 import pkgutil
+from pathlib import Path
 from typing import List, Protocol, Any
 
 
@@ -22,7 +23,8 @@ class SupportsSetup(Protocol):
 def load_plugins(app: Any) -> List[SupportsSetup]:
     """Discover and initialise plugins within the package."""
     loaded: List[SupportsSetup] = []
-    for mod in pkgutil.iter_modules(__path__):  # type: ignore[name-defined]
+    pkg_dir = Path(__file__).resolve().parent
+    for mod in pkgutil.iter_modules([str(pkg_dir)]):
         if mod.name in {"base", "loader"}:
             continue
         module = importlib.import_module(f"plugins.{mod.name}")
