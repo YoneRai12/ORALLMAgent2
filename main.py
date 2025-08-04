@@ -32,16 +32,21 @@ from slowapi.util import get_remote_address
 from fastapi_csrf_protect import CsrfProtect
 
 from tools.browser_session import BrowserSession
+from agent import AgentManager
+from dashboard import dashboard_router
 
 # Load environment variables from .env if present
 load_dotenv()
 
 app = FastAPI(title="Manus Agent", description="Autonomous AI agent scaffold")
+app.include_router(dashboard_router)
 
 # Directory for storing session artifacts
 SESSION_DIR = Path(os.getenv("SESSION_DIR", "sessions"))
 SESSION_DIR.mkdir(parents=True, exist_ok=True)
 browser_sessions: Dict[str, BrowserSession] = {}
+agent_manager = AgentManager(max_agents=int(os.getenv("MAX_AGENTS", "5")))
+chat_rooms: Dict[str, set[WebSocket]] = {}
 
 # --- CORS ---
 origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")]
@@ -109,6 +114,11 @@ class BrowserCommand(BaseModel):
     """Control commands for an existing browser session."""
     action: str  # "pause", "resume", or "step"
 
+
+class AgentCreateRequest(BaseModel):
+    """Create a new sub-agent with optional profile."""
+    profile: str = "default"
+
 # --- Utility ---
 def call_llm(prompt: str) -> str:
     """Call the configured LLM server and return the generated text."""
@@ -151,6 +161,28 @@ async def run_task(request: Request, req: TaskRequest, csrf_protect: CsrfProtect
     csrf_protect.validate_csrf(request)
     plan = call_llm(f"Create a plan for the following task and return JSON steps: {req.instruction}")
     return {"plan": plan, "user": user}
+
+
+# --- Multi-agent management ---
+@app.post("/agents")
+async def create_agent_endpoint(req: AgentCreateRequest, user: str = Depends(get_current_user)) -> dict:
+    agent_id = agent_manager.create_agent(req.profile)
+    return {"agent_id": agent_id}
+
+
+@app.get("/agents")
+async def list_agents_endpoint(user: str = Depends(get_current_user)) -> dict:
+    return agent_manager.list_agents()
+
+
+@app.post("/agents/{agent_id}/task")
+async def agent_task_endpoint(agent_id: str, req: TaskRequest, user: str = Depends(get_current_user)) -> dict:
+    agent = agent_manager.get(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    plan = agent.plan(req.instruction)
+    result = agent.execute(plan)
+    return {"plan": plan, "result": result}
 
 
 # --- Browser Session Endpoints ---
@@ -198,13 +230,34 @@ async def session_stream(websocket: WebSocket, session_id: str) -> None:
     if session is None:
         await websocket.close(code=1008)
         return
+    queue = session.register()
     await websocket.accept()
     try:
         while True:
-            img = await session.queue.get()
+            img = await queue.get()
             await websocket.send_text(img)
     except WebSocketDisconnect:
         pass
+    finally:
+        session.unregister(queue)
+
+
+@app.websocket("/ws/chat/{room}")
+async def chat_stream(websocket: WebSocket, room: str) -> None:
+    """Simple multi-user chat channel for collaboration."""
+    await websocket.accept()
+    users = chat_rooms.setdefault(room, set())
+    users.add(websocket)
+    try:
+        while True:
+            msg = await websocket.receive_text()
+            for ws in list(users):
+                if ws is not websocket:
+                    await ws.send_text(msg)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        users.discard(websocket)
 
 # --- CLI Mode ---
 def cli_mode(args: List[str]) -> None:

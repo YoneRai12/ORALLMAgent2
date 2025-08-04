@@ -21,7 +21,9 @@ class BrowserSession:
         self.session_id = session_id
         self.save_dir = save_root / session_id
         self.save_dir.mkdir(parents=True, exist_ok=True)
-        self.queue: asyncio.Queue[str] = asyncio.Queue()
+        # Each connected client receives frames through its own queue so that
+        # screenshots can be broadcast to multiple viewers simultaneously.
+        self.queues: list[asyncio.Queue[str]] = []
         self._pause = asyncio.Event()
         self._pause.set()
         self._playwright = None
@@ -61,7 +63,22 @@ class BrowserSession:
         await self.page.screenshot(path=str(path))
         with path.open("rb") as f:
             b64 = base64.b64encode(f.read()).decode()
-        await self.queue.put(b64)
+        # Broadcast the frame to all registered queues.
+        for q in list(self.queues):
+            await q.put(b64)
+
+    def register(self) -> asyncio.Queue[str]:
+        """Register a new consumer queue for streaming screenshots."""
+        q: asyncio.Queue[str] = asyncio.Queue()
+        self.queues.append(q)
+        return q
+
+    def unregister(self, q: asyncio.Queue[str]) -> None:
+        """Remove a previously registered consumer queue."""
+        try:
+            self.queues.remove(q)
+        except ValueError:
+            pass
 
     def pause(self) -> None:
         self._pause.clear()
