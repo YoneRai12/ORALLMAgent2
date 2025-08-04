@@ -111,6 +111,36 @@ curl -OJ -H "Authorization: Bearer <ACCESS_TOKEN>" \
 ```
 
 
+## 🔴 Manus Mode / マヌスモード
+1. Launch API / API を起動:
+   ```bash
+   python -m uvicorn main:app --reload
+   ```
+2. Get JWT token (see below) / JWT トークン取得（後述）
+3. Create session / セッション作成:
+   ```bash
+   curl -X POST http://localhost:8000/api/sessions \\
+        -H "Authorization: Bearer <TOKEN>"
+   ```
+   Response → `{ "session_id": "..." }`
+4. Open live viewer / ライブビューアを開く:
+   - Access `http://localhost:8000/dashboard/viewer.html`
+   - Enter token & session ID then connect
+
+### API examples / API 例
+Upload / アップロード:
+```bash
+curl -X POST -H "Authorization: Bearer <TOKEN>" \\
+     -F "file=@path/to/file" http://localhost:8000/api/upload
+```
+
+Download / ダウンロード:
+```bash
+curl -OJ -H "Authorization: Bearer <TOKEN>" \\
+     http://localhost:8000/api/download/<filename>
+```
+
+
 ## API Authentication / API 認証
 1. Sign up / サインアップ:
 ```bash
@@ -218,7 +248,7 @@ ws.resume()
 - `agent/` : Core planning/execution scaffolding / 計画・実行の核となる雛形
 - `tools/` : Tool implementations (web search, browser automation, etc.) / ツール実装
 - `sessions/` : Session management code / セッション管理コード
-- `logs/` : Action logs & replay utilities / 行動ログとリプレイユーティリティ
+- `log/` : Action logs & replay utilities / 行動ログとリプレイユーティリティ
 - `plugins/` : Drop-in extension modules / 拡張モジュール
 - `session_data/` : Runtime session storage (gitignored) / 実行時セッション保存先（Git 管理外）
 - `prompts/` : Prompt templates / プロンプトテンプレート

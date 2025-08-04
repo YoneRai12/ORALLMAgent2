@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict
 
 from .session import Session
-from logs.recorder import ActionRecorder
+from log.record import ActionRecorder
 from tools.browser_session import BrowserSession
 
 

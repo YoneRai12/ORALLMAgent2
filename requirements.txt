@@ -12,3 +12,5 @@ pluggy
 python-multipart
 aiofiles
 passlib[bcrypt]
+opencv-python-headless
+fastapi-users

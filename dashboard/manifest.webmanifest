@@ -1,0 +1,10 @@
+{
+  "name": "ManusLocal",
+  "short_name": "Manus",
+  "start_url": "/dashboard/viewer.html",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#0d1117",
+  "icons": []
+}
+
