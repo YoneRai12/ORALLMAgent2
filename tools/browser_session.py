@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import time
+import random
 from pathlib import Path
 from typing import Optional
 
@@ -31,17 +32,22 @@ class BrowserSession:
         self._playwright = None
         self.browser: Optional[Browser] = None
         self.page: Optional[Page] = None
+        self.video_path: Optional[Path] = None
+        self._context = None
         self.logger = logger
 
     async def start(self, url: str = "about:blank") -> None:
         """Launch a browser and navigate to ``url``."""
         self._playwright = await async_playwright().start()
         self.browser = await self._playwright.chromium.launch(headless=True)
-        self.page = await self.browser.new_page()
+        context = await self.browser.new_context(record_video_dir=str(self.save_dir))
+        self.page = await context.new_page()
         await self.page.goto(url)
         if self.logger:
             self.logger.log("browser_start", {"url": url})
         await self._capture()
+        # store context for closing and get video later
+        self._context = context
 
     async def goto(self, url: str) -> None:
         await self._wait_if_paused()
@@ -49,12 +55,18 @@ class BrowserSession:
         await self.page.goto(url)
         if self.logger:
             self.logger.log("goto", {"url": url})
+        await self._human_delay()
         await self._capture()
 
     async def click(self, selector: str) -> None:
         await self._wait_if_paused()
         assert self.page is not None
-        await self.page.click(selector)
+        locator = self.page.locator(selector)
+        box = await locator.bounding_box()
+        if box:
+            await self.page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2, steps=10)
+            await self._human_delay()
+        await locator.click()
         if self.logger:
             self.logger.log("click", {"selector": selector})
         await self._capture()
@@ -62,7 +74,11 @@ class BrowserSession:
     async def fill(self, selector: str, text: str) -> None:
         await self._wait_if_paused()
         assert self.page is not None
-        await self.page.fill(selector, text)
+        locator = self.page.locator(selector)
+        await locator.click()
+        for ch in text:
+            await self.page.keyboard.type(ch)
+            await self._human_delay(0.05, 0.2)
         if self.logger:
             self.logger.log("fill", {"selector": selector})
         await self._capture()
@@ -77,6 +93,10 @@ class BrowserSession:
         # Broadcast the frame to all registered queues.
         for q in list(self.queues):
             await q.put(b64)
+
+    async def _human_delay(self, min_delay: float = 0.1, max_delay: float = 0.3) -> None:
+        """Sleep for a randomised short interval to mimic human behaviour."""
+        await asyncio.sleep(random.uniform(min_delay, max_delay))
 
     def register(self) -> asyncio.Queue[str]:
         """Register a new consumer queue for streaming screenshots."""
@@ -106,6 +126,13 @@ class BrowserSession:
         await self._pause.wait()
 
     async def close(self) -> None:
+        if self._context is not None:
+            try:
+                await self._context.close()
+                if self.page is not None and hasattr(self.page, "video"):
+                    self.video_path = Path(await self.page.video.path())
+            except Exception:
+                self.video_path = None
         if self.browser is not None:
             await self.browser.close()
         if self._playwright is not None:

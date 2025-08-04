@@ -11,7 +11,9 @@ This project provides a scaffold for building a Manus-style autonomous AI agent.
 - LLM server configurable via `.env` / LLM サーバーは `.env` で設定可能
 - `/status` health endpoint / `/status` ヘルスチェックエンドポイント
 - Prompt template for merge conflict resolution / マージコンフリクト解消プロンプト
-- Real-time browser automation streaming with WebSocket / WebSocket によるリアルタイムブラウザ操作配信
+- Real-time browser automation streaming & recording with WebSocket / ブラウザ操作のリアルタイム配信・録画 (WebSocket)
+- Multi-user authentication with JWT & signup / JWT によるマルチユーザー認証とサインアップ
+- File upload/download API for agent tasks / ファイルアップロード・ダウンロード API
 - Multi-user chat and task control / マルチユーザーチャットとタスク制御
 - Sub-agent management via API / API からのサブエージェント管理
 - Plugin & workflow scaffolds for extensibility / プラグイン・ワークフロー拡張の雛形
@@ -75,12 +77,13 @@ python main.py "write a haiku about the sky"
    ```
 3. Connect via WebSocket / WebSocket で接続:
    ```javascript
-   const ws = new WebSocket('ws://localhost:8001/ws/session/<session_id>');
+   const ws = new WebSocket('ws://localhost:8001/ws/session/<session_id>?token=<ACCESS_TOKEN>');
    ws.onmessage = ev => {
      const img = document.getElementById('view');
      img.src = `data:image/png;base64,${ev.data}`;
    };
    ```
+   A minimal viewer is provided at `dashboard/viewer.html`.
 4. Control session / セッション制御:
    ```bash
    curl -X POST http://localhost:8001/sessions/<session_id>/browser/command \
@@ -90,9 +93,32 @@ python main.py "write a haiku about the sky"
         -d '{"action": "pause"}'
    ```
 
+### File upload/download / ファイルアップロード・ダウンロード
+```bash
+# upload
+curl -X POST -H "Authorization: Bearer <ACCESS_TOKEN>" \
+     -F "uploaded=@path/to/file" http://localhost:8001/sessions/<session_id>/files
+
+# download
+curl -OJ -H "Authorization: Bearer <ACCESS_TOKEN>" \
+     http://localhost:8001/sessions/<session_id>/files/<filename>
+```
+
+### Recorded video / 録画取得
+```bash
+curl -OJ -H "Authorization: Bearer <ACCESS_TOKEN>" \
+     http://localhost:8001/sessions/<session_id>/browser/video
+```
+
 
 ## API Authentication / API 認証
-1. Request a token / トークン取得:
+1. Sign up / サインアップ:
+```bash
+curl -X POST http://localhost:8001/users/signup \
+     -H 'Content-Type: application/json' \
+     -d '{"username":"alice", "password":"secret"}'
+```
+2. Request a token / トークン取得:
 ```bash
 curl -X POST -H "Content-Type: application/x-www-form-urlencoded" \
      -d "username=admin&password=change_me" \
@@ -100,7 +126,7 @@ curl -X POST -H "Content-Type: application/x-www-form-urlencoded" \
      http://localhost:8001/token -D -
 ```
 The response header `X-CSRF-Token` and the JWT in JSON should be used for subsequent requests.
-2. Call secured endpoint / 認証付きエンドポイント呼び出し:
+3. Call secured endpoint / 認証付きエンドポイント呼び出し:
 ```bash
 curl -X POST http://localhost:8001/api/task \
      -H "Content-Type: application/json" \

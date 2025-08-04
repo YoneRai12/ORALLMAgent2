@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Session Viewer</title>
+  <style>img{max-width:100%;}</style>
+</head>
+<body>
+  <input id="token" placeholder="JWT token" size="50" />
+  <input id="session" placeholder="session id" />
+  <button onclick="connect()">Connect</button>
+  <div><img id="view" /></div>
+  <script>
+    function connect(){
+      const token=document.getElementById('token').value;
+      const sess=document.getElementById('session').value;
+      const ws=new WebSocket(`ws://${location.host}/ws/session/${sess}?token=${token}`);
+      ws.onmessage=(ev)=>{document.getElementById('view').src='data:image/png;base64,'+ev.data;};
+    }
+  </script>
+</body>
+</html>

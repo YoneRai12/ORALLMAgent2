@@ -21,7 +21,7 @@ from typing import Dict, List
 
 import requests
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, UploadFile, File, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import FileResponse, JSONResponse
@@ -35,6 +35,7 @@ from agent import AgentManager
 from dashboard import dashboard_router, set_state
 from sessions.manager import SessionManager
 from plugins import load_plugins
+from users import UserManager
 
 # Load environment variables from .env if present
 load_dotenv()
@@ -45,11 +46,22 @@ app.include_router(dashboard_router)
 # Directory for storing session artifacts
 SESSION_DIR = Path(os.getenv("SESSION_DIR", "session_data"))
 SESSION_DIR.mkdir(parents=True, exist_ok=True)
+API_USER = os.getenv("API_USER", "admin")
+API_PASSWORD = os.getenv("API_PASSWORD", "change_me")
 session_manager = SessionManager(SESSION_DIR)
 agent_manager = AgentManager(max_agents=int(os.getenv("MAX_AGENTS", "5")))
+user_db = UserManager(Path(os.getenv("USER_DB", "data/users.json")))
+# initialise default admin user if credentials provided
+if not user_db.user_exists(API_USER):
+    try:
+        user_db.create_user(API_USER, API_PASSWORD)
+    except ValueError:
+        pass
 set_state(agent_manager, session_manager)
 loaded_plugins = load_plugins(app)
 chat_rooms: Dict[str, set[WebSocket]] = {}
+UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "uploaded_files"))
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- CORS ---
 origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")]
@@ -78,8 +90,6 @@ def get_csrf_config() -> CsrfSettings:  # pragma: no cover - configuration
 SECRET_KEY = os.getenv("JWT_SECRET", "supersecret")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_SECONDS = int(os.getenv("JWT_EXPIRE_SECONDS", "3600"))
-API_USER = os.getenv("API_USER", "admin")
-API_PASSWORD = os.getenv("API_PASSWORD", "change_me")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
 
@@ -93,7 +103,7 @@ def verify_token(token: str) -> str:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub", "")
-        if username != API_USER:
+        if not user_db.user_exists(username):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
         return username
     except JWTError as exc:
@@ -127,6 +137,11 @@ class SessionCreateRequest(BaseModel):
     """Request body for creating a new user session."""
     profile: str = "default"
 
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+
 # --- Utility ---
 def call_llm(prompt: str) -> str:
     """Call the configured LLM server and return the generated text."""
@@ -150,14 +165,22 @@ def call_llm(prompt: str) -> str:
 @app.post("/token")
 @limiter.limit("5/minute")
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), csrf_protect: CsrfProtect = Depends()) -> Response:
-    if form_data.username != API_USER or form_data.password != API_PASSWORD:
+    if not user_db.authenticate(form_data.username, form_data.password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
-    access_token = create_access_token({"sub": API_USER}, ACCESS_TOKEN_EXPIRE_SECONDS)
+    access_token = create_access_token({"sub": form_data.username}, ACCESS_TOKEN_EXPIRE_SECONDS)
     csrf_token = csrf_protect.generate_csrf()
     response = JSONResponse({"access_token": access_token, "token_type": "bearer"})
     csrf_protect.set_csrf_cookie(response, csrf_token)
     response.headers["X-CSRF-Token"] = csrf_token
     return response
+
+
+@app.post("/users/signup")
+async def signup(user: UserCreate) -> dict:
+    if user_db.user_exists(user.username):
+        raise HTTPException(status_code=400, detail="user exists")
+    user_db.create_user(user.username, user.password)
+    return {"status": "created"}
 
 @app.get("/status")
 async def status_endpoint() -> dict:
@@ -197,7 +220,7 @@ async def agent_task_endpoint(agent_id: str, req: TaskRequest, user: str = Depen
 @app.post("/sessions")
 async def create_session_endpoint(req: SessionCreateRequest, user: str = Depends(get_current_user)) -> dict:
     agent_id = agent_manager.create_agent(req.profile)
-    session = session_manager.create(agent_id)
+    session = session_manager.create(agent_id, owner=user)
     agent = agent_manager.get(agent_id)
     if agent and session.log:
         agent.logger = session.log
@@ -206,27 +229,57 @@ async def create_session_endpoint(req: SessionCreateRequest, user: str = Depends
 
 @app.get("/sessions")
 async def list_sessions_endpoint(user: str = Depends(get_current_user)) -> dict:
-    return session_manager.list()
+    return session_manager.list(owner=user)
 
 
 @app.post("/sessions/{session_id}/save")
 async def save_session_endpoint(session_id: str, user: str = Depends(get_current_user)) -> dict:
+    session = session_manager.get(session_id)
+    if session is None or session.owner != user:
+        raise HTTPException(status_code=404, detail="session not found")
     session_manager.save(session_id)
     return {"status": "saved"}
 
 
 @app.post("/sessions/{session_id}/load")
 async def load_session_endpoint(session_id: str, user: str = Depends(get_current_user)) -> dict:
-    session_manager.load(session_id)
+    session = session_manager.load(session_id)
+    if session.owner != user:
+        raise HTTPException(status_code=403, detail="forbidden")
     return {"status": "loaded"}
 
 
 @app.get("/sessions/{session_id}/log")
 async def download_log_endpoint(session_id: str, user: str = Depends(get_current_user)) -> FileResponse:
     session = session_manager.get(session_id)
-    if session is None or session.log is None:
+    if session is None or session.log is None or session.owner != user:
         raise HTTPException(status_code=404, detail="session not found")
     return FileResponse(session.log.path, filename="actions.log")
+
+
+# --- File upload/download ---
+@app.post("/sessions/{session_id}/files")
+async def upload_file(session_id: str, uploaded: UploadFile = File(...), user: str = Depends(get_current_user)) -> dict:
+    session = session_manager.get(session_id)
+    if session is None or session.owner != user:
+        raise HTTPException(status_code=404, detail="session not found")
+    dest_dir = UPLOAD_DIR / session_id
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = dest_dir / uploaded.filename
+    with dest_path.open("wb") as f:
+        f.write(await uploaded.read())
+    return {"filename": uploaded.filename}
+
+
+@app.get("/sessions/{session_id}/files/{filename}")
+async def download_file(session_id: str, filename: str, user: str = Depends(get_current_user)) -> FileResponse:
+    session = session_manager.get(session_id)
+    if session is None or session.owner != user:
+        raise HTTPException(status_code=404, detail="session not found")
+    file_path = UPLOAD_DIR / session_id / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="file not found")
+    return FileResponse(file_path)
 
 
 # --- Browser Session Endpoints ---
@@ -234,7 +287,7 @@ async def download_log_endpoint(session_id: str, user: str = Depends(get_current
 async def start_browser(session_id: str, req: BrowserStartRequest, user: str = Depends(get_current_user)) -> dict:
     """Launch browser for an existing session and navigate to the given URL."""
     session = session_manager.get(session_id)
-    if session is None:
+    if session is None or session.owner != user:
         raise HTTPException(status_code=404, detail="session not found")
     assert session.browser is not None
     await session.browser.start(req.url)
@@ -245,7 +298,7 @@ async def start_browser(session_id: str, req: BrowserStartRequest, user: str = D
 async def control_browser(session_id: str, cmd: BrowserCommand, user: str = Depends(get_current_user)) -> dict:
     """Control an existing browser session (pause/resume/step)."""
     session = session_manager.get(session_id)
-    if session is None or session.browser is None:
+    if session is None or session.browser is None or session.owner != user:
         raise HTTPException(status_code=404, detail="session not found")
     if cmd.action == "pause":
         session.browser.pause()
@@ -262,17 +315,34 @@ async def control_browser(session_id: str, cmd: BrowserCommand, user: str = Depe
 async def download_session(session_id: str, user: str = Depends(get_current_user)) -> FileResponse:
     """Download screenshots for a session as a ZIP archive."""
     session = session_manager.get(session_id)
-    if session is None or session.browser is None:
+    if session is None or session.browser is None or session.owner != user:
         raise HTTPException(status_code=404, detail="session not found")
     zip_path = shutil.make_archive(str(session.browser.save_dir), "zip", root_dir=session.browser.save_dir)
     return FileResponse(zip_path, filename=f"{session_id}.zip")
 
 
-@app.websocket("/ws/session/{session_id}")
-async def session_stream(websocket: WebSocket, session_id: str) -> None:
-    """Stream base64-encoded screenshots over WebSocket."""
+@app.get("/sessions/{session_id}/browser/video")
+async def download_video(session_id: str, user: str = Depends(get_current_user)) -> FileResponse:
+    """Download recorded video for a browser session."""
     session = session_manager.get(session_id)
-    if session is None or session.browser is None:
+    if session is None or session.browser is None or session.owner != user:
+        raise HTTPException(status_code=404, detail="session not found")
+    video_path = session.browser.video_path
+    if video_path is None or not video_path.exists():
+        raise HTTPException(status_code=404, detail="video not available")
+    return FileResponse(video_path, filename=f"{session_id}.webm")
+
+
+@app.websocket("/ws/session/{session_id}")
+async def session_stream(websocket: WebSocket, session_id: str, token: str) -> None:
+    """Stream base64-encoded screenshots over WebSocket."""
+    try:
+        user = verify_token(token)
+    except HTTPException:
+        await websocket.close(code=1008)
+        return
+    session = session_manager.get(session_id)
+    if session is None or session.browser is None or session.owner != user:
         await websocket.close(code=1008)
         return
     queue = session.browser.register()
