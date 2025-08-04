@@ -2,7 +2,6 @@
 
 import os
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -10,6 +9,7 @@ from limiter import limiter
 from jose import JWTError, jwt
 
 from users.auth import UserManager
+from users.deps import get_user_manager
 from .models import Token, UserCreate
 
 SECRET_KEY = os.getenv("JWT_SECRET", "change_me")
@@ -19,7 +19,6 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
 
 router = APIRouter(prefix="/auth", tags=["Manus-Like"])
-user_manager = UserManager(Path("data/users.json"))
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
@@ -32,18 +31,25 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
 
 
 @router.post("/signup")
-def signup(payload: UserCreate) -> dict:
+def signup(
+    payload: UserCreate, user_manager: UserManager = Depends(get_user_manager)
+) -> dict:
     """Register a new user account."""
 
     if user_manager.user_exists(payload.username):
         raise HTTPException(status_code=400, detail="user exists")
+
     user_manager.create_user(payload.username, payload.password)
     return {"msg": "created"}
 
 
-def _issue_token(form_data: OAuth2PasswordRequestForm) -> Token:
+def _issue_token(
+    form_data: OAuth2PasswordRequestForm, user_manager: UserManager
+) -> Token:
     if not user_manager.authenticate(form_data.username, form_data.password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials"
+        )
     token = create_access_token(
         {"sub": form_data.username},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
@@ -52,29 +58,42 @@ def _issue_token(form_data: OAuth2PasswordRequestForm) -> Token:
 
 
 @router.post("/token", response_model=Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends()) -> Token:
+def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    user_manager: UserManager = Depends(get_user_manager),
+) -> Token:
     """Authenticate a user and return an access token."""
 
-    return _issue_token(form_data)
+    return _issue_token(form_data, user_manager)
 
 
 @router.post("/login", response_model=Token)
 @limiter.limit("60/minute")
-def login_rate_limited(request: Request, form_data: OAuth2PasswordRequestForm = Depends()) -> Token:
+def login_rate_limited(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    user_manager: UserManager = Depends(get_user_manager),
+) -> Token:
     """Rate limited login endpoint."""
 
-    return _issue_token(form_data)
+    return _issue_token(form_data, user_manager)
 
 
-def get_current_user(token: str = Depends(oauth2_scheme)) -> str:
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    user_manager: UserManager = Depends(get_user_manager),
+) -> str:
     """FastAPI dependency to retrieve the current user from a JWT."""
 
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username = payload.get("sub")
         if username is None or not user_manager.user_exists(username):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token"
+            )
     except JWTError as exc:  # pragma: no cover - simple error path
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token") from exc
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token"
+        ) from exc
     return username
-

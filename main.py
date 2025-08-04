@@ -9,10 +9,10 @@ Security Features:
 - CORS, rate limiting, and CSRF protection for web clients
 - API served only on localhost/LAN (do not expose publicly)
 """
+
 import argparse
 import os
 import time
-import uuid
 import shutil
 import shlex
 from pathlib import Path
@@ -20,8 +20,20 @@ from typing import Dict, List
 
 import requests
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, UploadFile, File, WebSocket, WebSocketDisconnect, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import FileResponse, JSONResponse
@@ -29,10 +41,8 @@ from jose import JWTError, jwt
 from pydantic import BaseModel, Field
 from slowapi import _rate_limit_exceeded_handler
 from fastapi_csrf_protect import CsrfProtect
+from fastapi_csrf_protect.exceptions import CsrfProtectError
 from limiter import limiter
-
-CSRF_DISABLE = os.getenv("CSRF_DISABLE", "false").lower() == "true"
-
 from agent import AgentManager
 from dashboard import dashboard_router, set_state
 from api import router as api_router, set_managers as set_api_managers
@@ -42,17 +52,22 @@ from users import UserManager
 from auth.router import router as auth_router
 from agent.parsers import parse_kv_pairs
 
+CSRF_DISABLE = os.getenv("CSRF_DISABLE", "false").lower() == "true"
+
 # Load environment variables from .env if present
 load_dotenv()
 
 app = FastAPI(title="Manus Agent", description="Autonomous AI agent scaffold")
 
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
-
-app.add_middleware(
-    TrustedHostMiddleware,
-    allowed_hosts=["127.0.0.1", "localhost"]
-)
+allowed_hosts = [
+    h.strip()
+    for h in os.getenv(
+        "ALLOWED_HOSTS",
+        "127.0.0.1,localhost,127.0.0.1:8001,localhost:8001",
+    ).split(",")
+    if h.strip()
+]
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
 app.include_router(dashboard_router)
 app.include_router(auth_router)
@@ -66,6 +81,7 @@ API_PASSWORD = os.getenv("API_PASSWORD", "change_me")
 session_manager = SessionManager(SESSION_DIR)
 agent_manager = AgentManager(max_agents=int(os.getenv("MAX_AGENTS", "5")))
 user_db = UserManager(Path(os.getenv("USER_DB", "data/users.json")))
+app.state.user_manager = user_db
 # make managers available to API router
 set_api_managers(agent_manager, session_manager)
 # initialise default admin user if credentials provided
@@ -81,13 +97,15 @@ UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "uploaded_files"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/stream", StaticFiles(directory=SESSION_DIR), name="stream")
 
-origins = [o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()]
+origins = [
+    o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"]
+    allow_headers=["*"],
 )
 
 # --- Rate Limiting ---
@@ -101,24 +119,34 @@ if not CSRF_SALT and os.getenv("DEBUG", "false").lower() != "true":
 
 
 class CsrfSettings(BaseModel):
-    secret_key: str = os.getenv("CSRF_SECRET", "change_me")
+    secret_key: str = CSRF_SALT or "change_me"
+
 
 @CsrfProtect.load_config
 def get_csrf_config() -> CsrfSettings:  # pragma: no cover - configuration
     return CsrfSettings()
 
+
 csrf_protect = CsrfProtect()
 
+
 if CSRF_DISABLE:
+
     @app.middleware("http")
     async def csrf_disabled(request: Request, call_next):
         return await call_next(request)
+
 else:
+
     @app.middleware("http")
     async def csrf_middleware(request: Request, call_next):
-        if request.method in {"GET", "HEAD", "OPTIONS"} or request.url.path in {"/docs", "/redoc", "/openapi.json"}:
-            return await call_next(request)
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            try:
+                await csrf_protect.validate_csrf(request)
+            except CsrfProtectError as exc:  # pragma: no cover - simple error path
+                return JSONResponse(status_code=403, content={"detail": str(exc)})
         return await call_next(request)
+
 
 # --- Auth Helpers ---
 SECRET_KEY = os.getenv("JWT_SECRET", "supersecret")
@@ -127,24 +155,32 @@ ACCESS_TOKEN_EXPIRE_SECONDS = int(os.getenv("JWT_EXPIRE_SECONDS", "3600"))
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
 
+
 def create_access_token(data: dict, expires_delta: int) -> str:
     to_encode = data.copy()
     expire = int(time.time()) + expires_delta
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
+
 def verify_token(token: str) -> str:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub", "")
         if not user_db.user_exists(username):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
+            )
         return username
     except JWTError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token validation failed") from exc
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Token validation failed"
+        ) from exc
+
 
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> str:
     return verify_token(token)
+
 
 # --- Models ---
 class TaskRequest(BaseModel):
@@ -163,27 +199,32 @@ class TaskRequest(BaseModel):
 
 class BrowserStartRequest(BaseModel):
     """Request body for starting a browser session."""
+
     url: str = "about:blank"
 
 
 class BrowserCommand(BaseModel):
     """Control commands for an existing browser session."""
+
     action: str  # "pause", "resume", or "step"
 
 
 class AgentCreateRequest(BaseModel):
     """Create a new sub-agent with optional profile."""
+
     profile: str = "default"
 
 
 class SessionCreateRequest(BaseModel):
     """Request body for creating a new user session."""
+
     profile: str = "default"
 
 
 class UserCreate(BaseModel):
     username: str
     password: str
+
 
 # --- Utility ---
 def call_llm(prompt: str) -> str:
@@ -220,13 +261,23 @@ def parse_amazon_command(cmd: str) -> Dict[str, str | None]:
         "pass": kv.get("pass"),
     }
 
+
 # --- API Endpoints ---
 @app.post("/token")
 @limiter.limit("5/minute")
-async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), csrf_protect: CsrfProtect = Depends()) -> Response:
+async def login(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    csrf_protect: CsrfProtect = Depends(),
+) -> Response:
     if not user_db.authenticate(form_data.username, form_data.password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
-    access_token = create_access_token({"sub": form_data.username}, ACCESS_TOKEN_EXPIRE_SECONDS)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+        )
+    access_token = create_access_token(
+        {"sub": form_data.username}, ACCESS_TOKEN_EXPIRE_SECONDS
+    )
     response = JSONResponse({"access_token": access_token, "token_type": "bearer"})
     if not CSRF_DISABLE:
         csrf_token, signed = csrf_protect.generate_csrf_tokens()
@@ -242,26 +293,37 @@ async def signup(user: UserCreate) -> dict:
     user_db.create_user(user.username, user.password)
     return {"status": "created"}
 
+
 @app.get("/status")
 async def status_endpoint() -> dict:
     return {"status": "ok", "version": "0.9.0"}
 
+
 @app.post("/api/task")
 @limiter.limit("5/minute")
-async def run_task(request: Request, req: TaskRequest, csrf_protect: CsrfProtect = Depends(), user: str = Depends(get_current_user)) -> dict:
+async def run_task(
+    request: Request,
+    req: TaskRequest,
+    csrf_protect: CsrfProtect = Depends(),
+    user: str = Depends(get_current_user),
+) -> dict:
     if not CSRF_DISABLE:
         await csrf_protect.validate_csrf(request)
     if req.task == "amazon_buy":
         # Inline credentials are accepted but not returned in the response
         return {"task": req.task, "item": req.item, "user": user}
     instruction = req.instruction or ""
-    plan = call_llm(f"Create a plan for the following task and return JSON steps: {instruction}")
+    plan = call_llm(
+        f"Create a plan for the following task and return JSON steps: {instruction}"
+    )
     return {"plan": plan, "user": user}
 
 
 # --- Multi-agent management ---
 @app.post("/agents")
-async def create_agent_endpoint(req: AgentCreateRequest, user: str = Depends(get_current_user)) -> dict:
+async def create_agent_endpoint(
+    req: AgentCreateRequest, user: str = Depends(get_current_user)
+) -> dict:
     agent_id = agent_manager.create_agent(req.profile)
     return {"agent_id": agent_id}
 
@@ -272,7 +334,9 @@ async def list_agents_endpoint(user: str = Depends(get_current_user)) -> dict:
 
 
 @app.post("/agents/{agent_id}/task")
-async def agent_task_endpoint(agent_id: str, req: TaskRequest, user: str = Depends(get_current_user)) -> dict:
+async def agent_task_endpoint(
+    agent_id: str, req: TaskRequest, user: str = Depends(get_current_user)
+) -> dict:
     agent = agent_manager.get(agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
@@ -283,7 +347,9 @@ async def agent_task_endpoint(agent_id: str, req: TaskRequest, user: str = Depen
 
 # --- Session Endpoints ---
 @app.post("/sessions")
-async def create_session_endpoint(req: SessionCreateRequest, user: str = Depends(get_current_user)) -> dict:
+async def create_session_endpoint(
+    req: SessionCreateRequest, user: str = Depends(get_current_user)
+) -> dict:
     agent_id = agent_manager.create_agent(req.profile)
     session = session_manager.create(agent_id, owner=user)
     agent = agent_manager.get(agent_id)
@@ -298,7 +364,9 @@ async def list_sessions_endpoint(user: str = Depends(get_current_user)) -> dict:
 
 
 @app.post("/sessions/{session_id}/save")
-async def save_session_endpoint(session_id: str, user: str = Depends(get_current_user)) -> dict:
+async def save_session_endpoint(
+    session_id: str, user: str = Depends(get_current_user)
+) -> dict:
     session = session_manager.get(session_id)
     if session is None or session.owner != user:
         raise HTTPException(status_code=404, detail="session not found")
@@ -307,7 +375,9 @@ async def save_session_endpoint(session_id: str, user: str = Depends(get_current
 
 
 @app.post("/sessions/{session_id}/load")
-async def load_session_endpoint(session_id: str, user: str = Depends(get_current_user)) -> dict:
+async def load_session_endpoint(
+    session_id: str, user: str = Depends(get_current_user)
+) -> dict:
     session = session_manager.load(session_id)
     if session.owner != user:
         raise HTTPException(status_code=403, detail="forbidden")
@@ -315,7 +385,9 @@ async def load_session_endpoint(session_id: str, user: str = Depends(get_current
 
 
 @app.get("/sessions/{session_id}/log")
-async def download_log_endpoint(session_id: str, user: str = Depends(get_current_user)) -> FileResponse:
+async def download_log_endpoint(
+    session_id: str, user: str = Depends(get_current_user)
+) -> FileResponse:
     session = session_manager.get(session_id)
     if session is None or session.log is None or session.owner != user:
         raise HTTPException(status_code=404, detail="session not found")
@@ -324,7 +396,11 @@ async def download_log_endpoint(session_id: str, user: str = Depends(get_current
 
 # --- File upload/download ---
 @app.post("/sessions/{session_id}/files")
-async def upload_file(session_id: str, uploaded: UploadFile = File(...), user: str = Depends(get_current_user)) -> dict:
+async def upload_file(
+    session_id: str,
+    uploaded: UploadFile = File(...),
+    user: str = Depends(get_current_user),
+) -> dict:
     session = session_manager.get(session_id)
     if session is None or session.owner != user:
         raise HTTPException(status_code=404, detail="session not found")
@@ -337,11 +413,17 @@ async def upload_file(session_id: str, uploaded: UploadFile = File(...), user: s
 
 
 @app.get("/sessions/{session_id}/files/{filename}")
-async def download_file(session_id: str, filename: str, user: str = Depends(get_current_user)) -> FileResponse:
+async def download_file(
+    session_id: str, filename: str, user: str = Depends(get_current_user)
+) -> FileResponse:
     session = session_manager.get(session_id)
     if session is None or session.owner != user:
         raise HTTPException(status_code=404, detail="session not found")
-    file_path = UPLOAD_DIR / session_id / filename
+    safe_name = Path(filename).name
+    base = (UPLOAD_DIR / session_id).resolve()
+    file_path = (base / safe_name).resolve()
+    if not file_path.is_relative_to(base):
+        raise HTTPException(status_code=403, detail="forbidden")
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="file not found")
     return FileResponse(file_path)
@@ -349,7 +431,9 @@ async def download_file(session_id: str, filename: str, user: str = Depends(get_
 
 # --- Browser Session Endpoints ---
 @app.post("/sessions/{session_id}/browser/start")
-async def start_browser(session_id: str, req: BrowserStartRequest, user: str = Depends(get_current_user)) -> dict:
+async def start_browser(
+    session_id: str, req: BrowserStartRequest, user: str = Depends(get_current_user)
+) -> dict:
     """Launch browser for an existing session and navigate to the given URL."""
     session = session_manager.get(session_id)
     if session is None or session.owner != user:
@@ -360,7 +444,9 @@ async def start_browser(session_id: str, req: BrowserStartRequest, user: str = D
 
 
 @app.post("/sessions/{session_id}/browser/command")
-async def control_browser(session_id: str, cmd: BrowserCommand, user: str = Depends(get_current_user)) -> dict:
+async def control_browser(
+    session_id: str, cmd: BrowserCommand, user: str = Depends(get_current_user)
+) -> dict:
     """Control an existing browser session (pause/resume/step)."""
     session = session_manager.get(session_id)
     if session is None or session.browser is None or session.owner != user:
@@ -377,17 +463,23 @@ async def control_browser(session_id: str, cmd: BrowserCommand, user: str = Depe
 
 
 @app.get("/sessions/{session_id}/browser/download")
-async def download_session(session_id: str, user: str = Depends(get_current_user)) -> FileResponse:
+async def download_session(
+    session_id: str, user: str = Depends(get_current_user)
+) -> FileResponse:
     """Download screenshots for a session as a ZIP archive."""
     session = session_manager.get(session_id)
     if session is None or session.browser is None or session.owner != user:
         raise HTTPException(status_code=404, detail="session not found")
-    zip_path = shutil.make_archive(str(session.browser.save_dir), "zip", root_dir=session.browser.save_dir)
+    zip_path = shutil.make_archive(
+        str(session.browser.save_dir), "zip", root_dir=session.browser.save_dir
+    )
     return FileResponse(zip_path, filename=f"{session_id}.zip")
 
 
 @app.get("/sessions/{session_id}/browser/video")
-async def download_video(session_id: str, user: str = Depends(get_current_user)) -> FileResponse:
+async def download_video(
+    session_id: str, user: str = Depends(get_current_user)
+) -> FileResponse:
     """Download recorded video for a browser session."""
     session = session_manager.get(session_id)
     if session is None or session.browser is None or session.owner != user:
@@ -439,6 +531,7 @@ async def chat_stream(websocket: WebSocket, room: str) -> None:
     finally:
         users.discard(websocket)
 
+
 # --- CLI Mode ---
 def cli_mode(args: List[str]) -> None:
     """Run the agent in CLI mode."""
@@ -447,26 +540,35 @@ def cli_mode(args: List[str]) -> None:
         parsed = parse_amazon_command(instruction)
         print(parsed)
         return
-    plan = call_llm(f"Create a plan for the following task and return JSON steps: {instruction}")
+    plan = call_llm(
+        f"Create a plan for the following task and return JSON steps: {instruction}"
+    )
     print("Plan:\n", plan)
     # Placeholder: execute the plan step-by-step and provide reflections.
     print("Execution is not yet implemented in this scaffold.")
+
 
 # --- Entrypoint ---
 def main() -> None:
     """Parse command-line arguments and start CLI or REST API server."""
     parser = argparse.ArgumentParser(description="Manus-style autonomous agent")
-    parser.add_argument("instruction", nargs=argparse.REMAINDER, help="Task instruction for CLI mode")
-    parser.add_argument("--api", action="store_true", help="Run REST API server instead of CLI")
+    parser.add_argument(
+        "instruction", nargs=argparse.REMAINDER, help="Task instruction for CLI mode"
+    )
+    parser.add_argument(
+        "--api", action="store_true", help="Run REST API server instead of CLI"
+    )
     args = parser.parse_args()
 
     if args.api:
         import uvicorn
+
         port = int(os.getenv("PORT", "8001"))
         # Warning: ensure the server is not exposed to the public internet.
         uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
     else:
         cli_mode(args.instruction)
+
 
 if __name__ == "__main__":
     main()
