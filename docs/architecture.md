@@ -45,6 +45,18 @@ logs/             # Persistent action logs and replay helpers
 - **React/Next.js** or **SwiftUI** for clients consuming the API and streams
 - **SQLite or Redis** (future) for session/state persistence
 
+## Streaming pipeline
+
+```mermaid
+graph LR
+    P[Playwright] --> Q[Frame Queue]
+    Q --> WS[WebSocket MJPEG]
+    Q --> FF[ffmpeg]
+    FF --> HLS[HLS segments]
+    WS --> Client
+    HLS --> Client
+```
+
 ## Sample WebSocket Subscription (JavaScript)
 
 ```javascript

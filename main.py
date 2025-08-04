@@ -9,8 +9,6 @@ Security Features:
 - CORS, rate limiting, and CSRF protection for web clients
 - API served only on localhost/LAN (do not expose publicly)
 """
-from __future__ import annotations
-
 import argparse
 import os
 import time
@@ -23,13 +21,16 @@ import requests
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, UploadFile, File, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from urllib.parse import urlparse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import FileResponse, JSONResponse
 from jose import JWTError, jwt
 from pydantic import BaseModel
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
+from slowapi import _rate_limit_exceeded_handler
 from fastapi_csrf_protect import CsrfProtect
+from limiter import limiter
 
 from agent import AgentManager
 from dashboard import dashboard_router, set_state
@@ -68,9 +69,9 @@ loaded_plugins = load_plugins(app)
 chat_rooms: Dict[str, set[WebSocket]] = {}
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "uploaded_files"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/stream", StaticFiles(directory=SESSION_DIR), name="stream")
 
-# --- CORS ---
-origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")]
+origins = [o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -78,13 +79,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"]
 )
+allowed_hosts = [urlparse(o).netloc or o for o in origins] or ["localhost"]
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
 # --- Rate Limiting ---
-limiter = Limiter(key_func=get_remote_address, default_limits=[os.getenv("RATE_LIMIT", "5/minute")])
 app.state.limiter = limiter
 app.add_exception_handler(429, _rate_limit_exceeded_handler)
 
 # --- CSRF Protection ---
+CSRF_SALT = os.getenv("CSRF_SECRET_SALT")
+if not CSRF_SALT and os.getenv("DEBUG", "false").lower() != "true":
+    raise RuntimeError("CSRF_SECRET_SALT not set")
+
+
 class CsrfSettings(BaseModel):
     secret_key: str = os.getenv("CSRF_SECRET", "change_me")
 
@@ -170,7 +177,7 @@ def call_llm(prompt: str) -> str:
 # --- API Endpoints ---
 @app.post("/token")
 @limiter.limit("5/minute")
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), csrf_protect: CsrfProtect = Depends()) -> Response:
+async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), csrf_protect: CsrfProtect = Depends()) -> Response:
     if not user_db.authenticate(form_data.username, form_data.password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
     access_token = create_access_token({"sub": form_data.username}, ACCESS_TOKEN_EXPIRE_SECONDS)
@@ -190,7 +197,7 @@ async def signup(user: UserCreate) -> dict:
 
 @app.get("/status")
 async def status_endpoint() -> dict:
-    return {"status": "ok", "version": "0.1"}
+    return {"status": "ok", "version": "0.9.0"}
 
 @app.post("/api/task")
 @limiter.limit("5/minute")

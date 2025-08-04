@@ -1,12 +1,12 @@
 """JWT authentication routes and utilities."""
-from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from limiter import limiter
 from jose import JWTError, jwt
 
 from users.auth import UserManager
@@ -41,10 +41,7 @@ def signup(payload: UserCreate) -> dict:
     return {"msg": "created"}
 
 
-@router.post("/token", response_model=Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends()) -> Token:
-    """Authenticate a user and return an access token."""
-
+def _issue_token(form_data: OAuth2PasswordRequestForm) -> Token:
     if not user_manager.authenticate(form_data.username, form_data.password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
     token = create_access_token(
@@ -52,6 +49,21 @@ def login(form_data: OAuth2PasswordRequestForm = Depends()) -> Token:
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     )
     return Token(access_token=token)
+
+
+@router.post("/token", response_model=Token)
+def login(form_data: OAuth2PasswordRequestForm = Depends()) -> Token:
+    """Authenticate a user and return an access token."""
+
+    return _issue_token(form_data)
+
+
+@router.post("/login", response_model=Token)
+@limiter.limit("60/minute")
+def login_rate_limited(request: Request, form_data: OAuth2PasswordRequestForm = Depends()) -> Token:
+    """Rate limited login endpoint."""
+
+    return _issue_token(form_data)
 
 
 def get_current_user(token: str = Depends(oauth2_scheme)) -> str:
