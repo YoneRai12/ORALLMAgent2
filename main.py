@@ -23,7 +23,6 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, UploadFile, File, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import FileResponse, JSONResponse
 from jose import JWTError, jwt
@@ -47,6 +46,14 @@ from agent.parsers import parse_kv_pairs
 load_dotenv()
 
 app = FastAPI(title="Manus Agent", description="Autonomous AI agent scaffold")
+
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["127.0.0.1", "localhost"]
+)
+
 app.include_router(dashboard_router)
 app.include_router(auth_router)
 app.include_router(api_router)
@@ -82,11 +89,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"]
 )
-allowed_hosts = [h.strip() for h in os.getenv(
-    "ALLOWED_HOSTS",
-    "127.0.0.1,localhost,127.0.0.1:8001,localhost:8001",
-).split(",") if h.strip()]
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
 # --- Rate Limiting ---
 app.state.limiter = limiter
