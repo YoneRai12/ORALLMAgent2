@@ -26,6 +26,7 @@ This project provides a scaffold for building a Manus-style autonomous AI agent.
 ## Security Notes / セキュリティ注意
 - **Expose LLM and agent APIs only to localhost or trusted LAN.** / **LLM やエージェント API はローカルまたは信頼できる LAN のみに公開してください。**
 - **Never commit real credentials or API keys. Use `.env` files.** / **認証情報や API キーをコードに直接書かないでください。必ず `.env` を使用してください。**
+- **Never share credentials in public channels. Inline secrets are scrubbed but still sensitive.** / **公開チャンネルで認証情報を共有しないでください。インライン入力しても機密情報です。**
 - User data is processed in-memory only; enable logging explicitly if needed. / ユーザーデータはメモリ上のみで処理されます。ログ記録が必要な場合は明示的に有効化してください。
 - The agent will not bypass CAPTCHAs or 2FA. / エージェントは CAPTCHA や 2FA を回避しません。
 - Recorded browser sessions may contain sensitive data—store and delete them carefully. / 保存されたブラウザセッションには機微情報が含まれる可能性があるため、取り扱いと削除に注意してください。
@@ -55,6 +56,11 @@ API docs available at `http://localhost:8001/docs`.
 ### 3. Run CLI / CLI 実行
 ```
 python main.py "write a haiku about the sky"
+```
+
+### 3b. Amazon purchase with inline credentials / インライン認証情報でのAmazon購入
+```
+python main.py '!amazon buy "Kindle Paperwhite" email=foo@example.com pass=S3cr3t!'
 ```
 
 ### 4. Start session & browser stream / セッション開始とブラウザストリーム
