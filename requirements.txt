@@ -12,5 +12,6 @@ pluggy
 python-multipart
 aiofiles
 passlib[bcrypt]
+bcrypt==4.0.1  # Pin for Windows passlib compatibility
 opencv-python-headless
 fastapi-users
