@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Session Viewer</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js');
+    }
+  </script>
+  <style>img{max-width:100%;display:block;margin:auto;}</style>
+</head>
+<body>
+  <input id="token" placeholder="JWT token" size="50" />
+  <input id="session" placeholder="session id" />
+  <button id="connect">Connect</button>
+  <button id="disconnect">Disconnect</button>
+  <div><img id="view" /><video id="hls" controls style="display:none;width:100%;"></video></div>
+  <script src="js/viewer.js"></script>
+</body>
+</html>
