@@ -14,24 +14,34 @@ from __future__ import annotations
 import argparse
 import os
 import time
-from typing import List
+import uuid
+import shutil
+from pathlib import Path
+from typing import Dict, List
 
 import requests
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from jose import JWTError, jwt
 from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from fastapi_csrf_protect import CsrfProtect
 
+from tools.browser_session import BrowserSession
+
 # Load environment variables from .env if present
 load_dotenv()
 
 app = FastAPI(title="Manus Agent", description="Autonomous AI agent scaffold")
+
+# Directory for storing session artifacts
+SESSION_DIR = Path(os.getenv("SESSION_DIR", "sessions"))
+SESSION_DIR.mkdir(parents=True, exist_ok=True)
+browser_sessions: Dict[str, BrowserSession] = {}
 
 # --- CORS ---
 origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")]
@@ -89,6 +99,16 @@ class TaskRequest(BaseModel):
     """Schema for REST API task requests."""
     instruction: str
 
+
+class BrowserStartRequest(BaseModel):
+    """Request body for starting a browser session."""
+    url: str = "about:blank"
+
+
+class BrowserCommand(BaseModel):
+    """Control commands for an existing browser session."""
+    action: str  # "pause", "resume", or "step"
+
 # --- Utility ---
 def call_llm(prompt: str) -> str:
     """Call the configured LLM server and return the generated text."""
@@ -131,6 +151,60 @@ async def run_task(request: Request, req: TaskRequest, csrf_protect: CsrfProtect
     csrf_protect.validate_csrf(request)
     plan = call_llm(f"Create a plan for the following task and return JSON steps: {req.instruction}")
     return {"plan": plan, "user": user}
+
+
+# --- Browser Session Endpoints ---
+@app.post("/browser/start")
+async def start_browser(req: BrowserStartRequest, user: str = Depends(get_current_user)) -> dict:
+    """Launch a new browser session and navigate to the given URL."""
+    session_id = str(uuid.uuid4())
+    session = BrowserSession(session_id, SESSION_DIR)
+    browser_sessions[session_id] = session
+    await session.start(req.url)
+    return {"session_id": session_id}
+
+
+@app.post("/browser/{session_id}/command")
+async def control_browser(session_id: str, cmd: BrowserCommand, user: str = Depends(get_current_user)) -> dict:
+    """Control an existing browser session (pause/resume/step)."""
+    session = browser_sessions.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    if cmd.action == "pause":
+        session.pause()
+    elif cmd.action == "resume":
+        session.resume()
+    elif cmd.action == "step":
+        await session.step()
+    else:
+        raise HTTPException(status_code=400, detail="unknown action")
+    return {"status": "ok"}
+
+
+@app.get("/browser/{session_id}/download")
+async def download_session(session_id: str, user: str = Depends(get_current_user)) -> FileResponse:
+    """Download screenshots for a session as a ZIP archive."""
+    session = browser_sessions.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    zip_path = shutil.make_archive(str(session.save_dir), "zip", root_dir=session.save_dir)
+    return FileResponse(zip_path, filename=f"{session_id}.zip")
+
+
+@app.websocket("/ws/session/{session_id}")
+async def session_stream(websocket: WebSocket, session_id: str) -> None:
+    """Stream base64-encoded screenshots over WebSocket."""
+    session = browser_sessions.get(session_id)
+    if session is None:
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    try:
+        while True:
+            img = await session.queue.get()
+            await websocket.send_text(img)
+    except WebSocketDisconnect:
+        pass
 
 # --- CLI Mode ---
 def cli_mode(args: List[str]) -> None:

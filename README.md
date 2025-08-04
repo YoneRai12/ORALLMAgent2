@@ -11,12 +11,14 @@ This project provides a scaffold for building a Manus-style autonomous AI agent.
 - LLM server configurable via `.env` / LLM サーバーは `.env` で設定可能
 - `/status` health endpoint / `/status` ヘルスチェックエンドポイント
 - Prompt template for merge conflict resolution / マージコンフリクト解消プロンプト
+- Real-time browser automation streaming with WebSocket / WebSocket によるリアルタイムブラウザ操作配信
 
 ## Security Notes / セキュリティ注意
 - **Expose LLM and agent APIs only to localhost or trusted LAN.** / **LLM やエージェント API はローカルまたは信頼できる LAN のみに公開してください。**
 - **Never commit real credentials or API keys. Use `.env` files.** / **認証情報や API キーをコードに直接書かないでください。必ず `.env` を使用してください。**
 - User data is processed in-memory only; enable logging explicitly if needed. / ユーザーデータはメモリ上のみで処理されます。ログ記録が必要な場合は明示的に有効化してください。
 - The agent will not bypass CAPTCHAs or 2FA. / エージェントは CAPTCHA や 2FA を回避しません。
+- Recorded browser sessions may contain sensitive data—store and delete them carefully. / 保存されたブラウザセッションには機微情報が含まれる可能性があるため、取り扱いと削除に注意してください。
 
 ## Quick Start / クイックスタート
 ### 1. Clone and setup / クローンとセットアップ
@@ -44,6 +46,34 @@ API docs available at `http://localhost:8001/docs`.
 ```
 python main.py "write a haiku about the sky"
 ```
+
+### 4. Start browser session & view stream / ブラウザセッション開始とストリーム視聴
+1. Start session / セッション開始:
+   ```bash
+   curl -X POST http://localhost:8001/browser/start \
+        -H "Authorization: Bearer <ACCESS_TOKEN>" \
+        -H "X-CSRF-Token: <CSRF_TOKEN>" \
+        -b cookie.txt \
+        -d '{"url": "https://example.com"}'
+   ```
+   Response contains `session_id`.
+2. Connect via WebSocket / WebSocket で接続:
+   ```javascript
+   const ws = new WebSocket('ws://localhost:8001/ws/session/<session_id>');
+   ws.onmessage = ev => {
+     const img = document.getElementById('view');
+     img.src = `data:image/png;base64,${ev.data}`;
+   };
+   ```
+3. Control session / セッション制御:
+   ```bash
+   curl -X POST http://localhost:8001/browser/<session_id>/command \
+        -H "Authorization: Bearer <ACCESS_TOKEN>" \
+        -H "X-CSRF-Token: <CSRF_TOKEN>" \
+        -b cookie.txt \
+        -d '{"action": "pause"}'
+   ```
+
 
 ## API Authentication / API 認証
 1. Request a token / トークン取得:
@@ -89,6 +119,15 @@ await fetch('http://localhost:8001/api/task', {
 });
 ```
 
+### JavaScript (WebSocket)
+```javascript
+const ws = new WebSocket('ws://localhost:8001/ws/session/<session_id>');
+ws.onmessage = ev => {
+  const img = document.getElementById('view');
+  img.src = `data:image/png;base64,${ev.data}`;
+};
+```
+
 ### Swift (URLSession)
 ```swift
 struct Token: Decodable { let access_token: String }
@@ -113,10 +152,23 @@ taskReq.httpBody = payload
 let (_, _) = try await URLSession.shared.data(for: taskReq)
 ```
 
+### Swift (WebSocket)
+```swift
+let url = URL(string: "ws://localhost:8001/ws/session/<session_id>")!
+let ws = URLSession.shared.webSocketTask(with: url)
+ws.receive { result in
+    if case let .success(.string(text)) = result {
+        // text contains base64 PNG data
+    }
+}
+ws.resume()
+```
+
 ## Directory Structure / ディレクトリ構成
 - `main.py` : CLI & API entry point / CLI & API エントリーポイント
 - `agent/` : Core planning/execution scaffolding / 計画・実行の核となる雛形
 - `tools/` : Tool implementations (web search, browser automation, etc.) / ツール実装
+- `sessions/` : Saved screenshots for browser sessions (gitignored) / ブラウザセッションのスクリーンショット保存先（Git 追跡外）
 - `prompts/` : Prompt templates / プロンプトテンプレート
 - `scripts/` : Environment setup scripts / 環境構築スクリプト
 
