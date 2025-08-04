@@ -9,3 +9,6 @@ python-jose[cryptography]
 slowapi
 fastapi-csrf-protect
 pluggy
+python-multipart
+aiofiles
+passlib[bcrypt]

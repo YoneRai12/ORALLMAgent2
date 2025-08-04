@@ -20,22 +20,30 @@ class SessionManager:
         self.storage.mkdir(parents=True, exist_ok=True)
         self.sessions: Dict[str, Session] = {}
 
-    def create(self, agent_id: str) -> Session:
-        """Create a new session with its own log and browser state."""
+    def create(self, agent_id: str, owner: str) -> Session:
+        """Create a new session owned by ``owner`` with its own log and browser state."""
         session_id = str(uuid.uuid4())
         session_path = self.storage / session_id
         session_path.mkdir(parents=True, exist_ok=True)
         recorder = ActionRecorder(session_path / "actions.log")
         browser = BrowserSession(session_id=session_id, save_root=self.storage, logger=recorder)
-        session = Session(session_id=session_id, agent_id=agent_id, browser=browser, log=recorder)
+        session = Session(session_id=session_id, agent_id=agent_id, owner=owner, browser=browser, log=recorder)
         self.sessions[session_id] = session
         return session
 
     def get(self, session_id: str) -> Session | None:
         return self.sessions.get(session_id)
 
-    def list(self) -> Dict[str, str]:
-        """Return mapping of session IDs to their agent IDs."""
+    def list(self, owner: str | None = None) -> Dict[str, str]:
+        """Return mapping of session IDs to their agent IDs.
+
+        Parameters
+        ----------
+        owner:
+            If provided, only sessions belonging to ``owner`` are returned.
+        """
+        if owner:
+            return {sid: s.agent_id for sid, s in self.sessions.items() if s.owner == owner}
         return {sid: s.agent_id for sid, s in self.sessions.items()}
 
     def save(self, session_id: str) -> None:

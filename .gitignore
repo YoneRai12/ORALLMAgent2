@@ -1,4 +1,6 @@
 .venv/
 __pycache__/
 session_data/
+uploaded_files/
+data/
 .env

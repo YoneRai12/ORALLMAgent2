@@ -35,6 +35,7 @@ class Session:
 
     session_id: str
     agent_id: str
+    owner: str = ""
     chat_history: List[Dict[str, str]] = field(default_factory=list)
     browser: Optional[BrowserSession] = None
     log: Optional[ActionRecorder] = None
@@ -44,13 +45,19 @@ class Session:
         return {
             "session_id": self.session_id,
             "agent_id": self.agent_id,
+            "owner": self.owner,
             "chat_history": self.chat_history,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any], storage: Path) -> "Session":
         """Reconstruct a :class:`Session` from stored metadata."""
-        session = cls(session_id=data["session_id"], agent_id=data["agent_id"], chat_history=data.get("chat_history", []))
+        session = cls(
+            session_id=data["session_id"],
+            agent_id=data["agent_id"],
+            owner=data.get("owner", ""),
+            chat_history=data.get("chat_history", []),
+        )
         log_path = storage / data["session_id"] / "actions.log"
         session.log = ActionRecorder(log_path)
         return session
