@@ -33,6 +33,8 @@ from slowapi import _rate_limit_exceeded_handler
 from fastapi_csrf_protect import CsrfProtect
 from limiter import limiter
 
+CSRF_DISABLE = os.getenv("CSRF_DISABLE", "false").lower() == "true"
+
 from agent import AgentManager
 from dashboard import dashboard_router, set_state
 from api import router as api_router, set_managers as set_api_managers
@@ -100,6 +102,19 @@ class CsrfSettings(BaseModel):
 @CsrfProtect.load_config
 def get_csrf_config() -> CsrfSettings:  # pragma: no cover - configuration
     return CsrfSettings()
+
+csrf_protect = CsrfProtect()
+
+if CSRF_DISABLE:
+    @app.middleware("http")
+    async def csrf_disabled(request: Request, call_next):
+        return await call_next(request)
+else:
+    @app.middleware("http")
+    async def csrf_middleware(request: Request, call_next):
+        if request.method in {"GET", "HEAD", "OPTIONS"} or request.url.path in {"/docs", "/redoc", "/openapi.json"}:
+            return await call_next(request)
+        return await call_next(request)
 
 # --- Auth Helpers ---
 SECRET_KEY = os.getenv("JWT_SECRET", "supersecret")
@@ -208,10 +223,11 @@ async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends
     if not user_db.authenticate(form_data.username, form_data.password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
     access_token = create_access_token({"sub": form_data.username}, ACCESS_TOKEN_EXPIRE_SECONDS)
-    csrf_token = csrf_protect.generate_csrf()
     response = JSONResponse({"access_token": access_token, "token_type": "bearer"})
-    csrf_protect.set_csrf_cookie(response, csrf_token)
-    response.headers["X-CSRF-Token"] = csrf_token
+    if not CSRF_DISABLE:
+        csrf_token, signed = csrf_protect.generate_csrf_tokens()
+        csrf_protect.set_csrf_cookie(signed, response)
+        response.headers["X-CSRF-Token"] = csrf_token
     return response
 
 
@@ -229,7 +245,8 @@ async def status_endpoint() -> dict:
 @app.post("/api/task")
 @limiter.limit("5/minute")
 async def run_task(request: Request, req: TaskRequest, csrf_protect: CsrfProtect = Depends(), user: str = Depends(get_current_user)) -> dict:
-    csrf_protect.validate_csrf(request)
+    if not CSRF_DISABLE:
+        await csrf_protect.validate_csrf(request)
     if req.task == "amazon_buy":
         # Inline credentials are accepted but not returned in the response
         return {"task": req.task, "item": req.item, "user": user}
