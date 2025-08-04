@@ -12,6 +12,11 @@ This project provides a scaffold for building a Manus-style autonomous AI agent.
 - `/status` health endpoint / `/status` ヘルスチェックエンドポイント
 - Prompt template for merge conflict resolution / マージコンフリクト解消プロンプト
 - Real-time browser automation streaming with WebSocket / WebSocket によるリアルタイムブラウザ操作配信
+- Multi-user chat and task control / マルチユーザーチャットとタスク制御
+- Sub-agent management via API / API からのサブエージェント管理
+- Plugin & workflow scaffolds for extensibility / プラグイン・ワークフロー拡張の雛形
+- Dashboard and architecture docs / ダッシュボードおよびアーキテクチャ文書
+  (see `docs/architecture.md`)
 
 ## Security Notes / セキュリティ注意
 - **Expose LLM and agent APIs only to localhost or trusted LAN.** / **LLM やエージェント API はローカルまたは信頼できる LAN のみに公開してください。**
@@ -126,6 +131,13 @@ ws.onmessage = ev => {
   const img = document.getElementById('view');
   img.src = `data:image/png;base64,${ev.data}`;
 };
+```
+
+### JavaScript (Collaboration Chat)
+```javascript
+const chat = new WebSocket('ws://localhost:8001/ws/chat/lobby');
+chat.onmessage = ev => console.log('msg', ev.data);
+chat.onopen = () => chat.send('hello everyone');
 ```
 
 ### Swift (URLSession)
