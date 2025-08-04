@@ -8,15 +8,18 @@ from fastapi.testclient import TestClient
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 os.environ.setdefault("CSRF_SECRET_SALT", "test_salt")
 os.environ.setdefault("CORS_ALLOWED_ORIGINS", "http://localhost")
+os.environ.setdefault("CSRF_DISABLE", "true")
 from main import app
 
 client = TestClient(app, base_url="http://localhost")
+
 
 @pytest.fixture(scope="session")
 def token() -> str:
     client.post("/auth/signup", json={"username": "u", "password": "p"})
     res = client.post("/auth/token", data={"username": "u", "password": "p"})
     return res.json()["access_token"]
+
 
 @pytest.fixture(scope="session")
 def session_id(token: str) -> str:

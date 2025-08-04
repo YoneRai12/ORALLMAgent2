@@ -160,7 +160,9 @@ curl -OJ -H "Authorization: Bearer <TOKEN>" \\
 
 ## Windows Quick-Start Troubleshooting / Windows クイックスタートトラブルシューティング
 - Install `bcrypt==4.0.1` to avoid passlib conflicts / `passlib` の衝突を避けるため `bcrypt==4.0.1` をインストールしてください。
+- Set `CSRF_SECRET_SALT` in `.env` to enable CSRF protection / `.env` に `CSRF_SECRET_SALT` を設定して CSRF を有効化します。
 - During local development set `CSRF_DISABLE=true` in `.env` to bypass CSRF on docs / ローカル開発時は `.env` に `CSRF_DISABLE=true` を設定してドキュメントの CSRF を無効化します。
+- Adjust `ALLOWED_HOSTS` if accessing the API via a different host or port / 別ホストやポートでアクセスする場合は `ALLOWED_HOSTS` を調整してください。
 - Save `.env` in UTF-8 without BOM to prevent `UnicodeDecodeError` / `.env` は UTF-8 (BOM なし) で保存し、`UnicodeDecodeError` を防止してください。
 
 
