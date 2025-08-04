@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from logs.recorder import ActionRecorder
+
 from playwright.async_api import async_playwright, Page, Browser
 
 
@@ -17,7 +19,7 @@ class BrowserSession:
     ``asyncio.Queue`` for WebSocket streaming.
     """
 
-    def __init__(self, session_id: str, save_root: Path) -> None:
+    def __init__(self, session_id: str, save_root: Path, logger: ActionRecorder | None = None) -> None:
         self.session_id = session_id
         self.save_dir = save_root / session_id
         self.save_dir.mkdir(parents=True, exist_ok=True)
@@ -29,6 +31,7 @@ class BrowserSession:
         self._playwright = None
         self.browser: Optional[Browser] = None
         self.page: Optional[Page] = None
+        self.logger = logger
 
     async def start(self, url: str = "about:blank") -> None:
         """Launch a browser and navigate to ``url``."""
@@ -36,24 +39,32 @@ class BrowserSession:
         self.browser = await self._playwright.chromium.launch(headless=True)
         self.page = await self.browser.new_page()
         await self.page.goto(url)
+        if self.logger:
+            self.logger.log("browser_start", {"url": url})
         await self._capture()
 
     async def goto(self, url: str) -> None:
         await self._wait_if_paused()
         assert self.page is not None
         await self.page.goto(url)
+        if self.logger:
+            self.logger.log("goto", {"url": url})
         await self._capture()
 
     async def click(self, selector: str) -> None:
         await self._wait_if_paused()
         assert self.page is not None
         await self.page.click(selector)
+        if self.logger:
+            self.logger.log("click", {"selector": selector})
         await self._capture()
 
     async def fill(self, selector: str, text: str) -> None:
         await self._wait_if_paused()
         assert self.page is not None
         await self.page.fill(selector, text)
+        if self.logger:
+            self.logger.log("fill", {"selector": selector})
         await self._capture()
 
     async def _capture(self) -> None:
