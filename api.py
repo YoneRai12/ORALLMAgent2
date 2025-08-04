@@ -1,4 +1,5 @@
 """REST API routes for file transfer and session management."""
+
 from __future__ import annotations
 
 import os
@@ -30,7 +31,9 @@ def set_managers(agent: AgentManager, sessions: SessionManager) -> None:
 
 
 @router.post("/upload")
-async def upload(file: UploadFile = File(...), user: str = Depends(get_current_user)) -> dict:
+async def upload(
+    file: UploadFile = File(...), user: str = Depends(get_current_user)
+) -> dict:
     """Receive a file and store it under ``UPLOAD_DIR``."""
 
     destination = UPLOAD_DIR / file.filename
@@ -40,13 +43,18 @@ async def upload(file: UploadFile = File(...), user: str = Depends(get_current_u
 
 
 @router.get("/download/{rel_path:path}")
-async def download(rel_path: str, user: str = Depends(get_current_user)) -> FileResponse:
+async def download(
+    rel_path: str, user: str = Depends(get_current_user)
+) -> FileResponse:
     """Serve a previously uploaded file."""
 
-    path = UPLOAD_DIR / rel_path
-    if not path.is_file():
+    resolved = (UPLOAD_DIR / rel_path).resolve()
+    base = UPLOAD_DIR.resolve()
+    if not resolved.is_relative_to(base):
+        raise HTTPException(status_code=403, detail="forbidden")
+    if not resolved.is_file():
         raise HTTPException(status_code=404, detail="file not found")
-    return FileResponse(path)
+    return FileResponse(resolved)
 
 
 @router.post("/sessions")
@@ -70,4 +78,3 @@ async def get_session(session_id: str, user: str = Depends(get_current_user)) ->
     if session is None or session.owner != user:
         raise HTTPException(status_code=404, detail="session not found")
     return session.to_dict()
-

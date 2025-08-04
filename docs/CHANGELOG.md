@@ -1,2 +1,2 @@
 ## Unreleased
-- Fix invalid host header when running locally by enforcing TrustedHostMiddleware
+- Harden download endpoints against path traversal; enable real CSRF validation; fix allowed hosts; deduplicate UserManager
