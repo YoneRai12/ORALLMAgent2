@@ -24,7 +24,6 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response, UploadFi
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from urllib.parse import urlparse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import FileResponse, JSONResponse
 from jose import JWTError, jwt
@@ -83,7 +82,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"]
 )
-allowed_hosts = [urlparse(o).netloc or o for o in origins] or ["localhost"]
+allowed_hosts = [h.strip() for h in os.getenv(
+    "ALLOWED_HOSTS",
+    "127.0.0.1,localhost,127.0.0.1:8001,localhost:8001",
+).split(",") if h.strip()]
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
 # --- Rate Limiting ---
