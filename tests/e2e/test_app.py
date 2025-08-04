@@ -7,11 +7,10 @@ from fastapi.testclient import TestClient
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 os.environ.setdefault("CSRF_SECRET_SALT", "test_salt")
-os.environ.setdefault("CORS_ALLOWED_ORIGINS", "http://testserver")
-os.environ.setdefault("ALLOWED_HOSTS", "testserver")
+os.environ.setdefault("CORS_ALLOWED_ORIGINS", "http://localhost")
 from main import app
 
-client = TestClient(app)
+client = TestClient(app, base_url="http://localhost")
 
 @pytest.fixture(scope="session")
 def token() -> str:

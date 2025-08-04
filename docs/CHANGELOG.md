@@ -1,2 +1,2 @@
 ## Unreleased
-- Fix Invalid host header when running locally
+- Fix invalid host header when running locally by enforcing TrustedHostMiddleware
