@@ -1,25 +1,22 @@
 # Manus-Style Autonomous Agent Scaffold / マヌス風自律エージェント雛形
 
 ## Overview / 概要
-This project provides a scaffold for building a Manus-style autonomous AI agent.
-It communicates with local LLM servers via HTTP APIs and can be extended to
-perform browser automation, file operations, and more.
+This project provides a scaffold for building a Manus-style autonomous AI agent. It communicates with local LLM servers via HTTP APIs and can be extended to perform browser automation, file operations, and more.
 
-本プロジェクトは、Manus 風の自律型 AI エージェントを構築するための雛形です。
-HTTP API を介してローカル LLM サーバーと通信し、ブラウザ自動化やファイル操作等を
-拡張して利用できます。
+本プロジェクトは、Manus 風の自律型 AI エージェントを構築するための雛形です。HTTP API を介してローカル LLM サーバーと通信し、ブラウザ自動化やファイル操作等を拡張して利用できます。
 
 ## Features / 特徴
-- CLI and REST API interfaces / CLI と REST API インターフェース
-- Supports multiple local LLM servers (configurable via `.env`) / 複数のローカル LLM サーバーを `.env` で切替可能
-- Secure credential management via environment variables / 環境変数による安全な認証情報管理
-- Playwright/Selenium ready for browser automation / Playwright/Selenium によるブラウザ自動化
-- Prompt template for AI-driven git merge conflict resolution / AI を用いたマージコンフリクト解消テンプレート
+- CLI, REST API, and future web/Apple app integration / CLI・REST API・Web/Apple アプリ統合
+- JWT 認証・CSRF 対策・レート制限・CORS 対応 / JWT auth, CSRF protection, rate limiting, and CORS
+- LLM server configurable via `.env` / LLM サーバーは `.env` で設定可能
+- `/status` health endpoint / `/status` ヘルスチェックエンドポイント
+- Prompt template for merge conflict resolution / マージコンフリクト解消プロンプト
 
 ## Security Notes / セキュリティ注意
 - **Expose LLM and agent APIs only to localhost or trusted LAN.** / **LLM やエージェント API はローカルまたは信頼できる LAN のみに公開してください。**
 - **Never commit real credentials or API keys. Use `.env` files.** / **認証情報や API キーをコードに直接書かないでください。必ず `.env` を使用してください。**
-- The agent will not bypass CAPTCHAs or 2FA; manual user input is required. / エージェントは CAPTCHA や 2FA を回避しません。必要に応じて手動入力してください。
+- User data is processed in-memory only; enable logging explicitly if needed. / ユーザーデータはメモリ上のみで処理されます。ログ記録が必要な場合は明示的に有効化してください。
+- The agent will not bypass CAPTCHAs or 2FA. / エージェントは CAPTCHA や 2FA を回避しません。
 
 ## Quick Start / クイックスタート
 ### 1. Clone and setup / クローンとセットアップ
@@ -28,33 +25,92 @@ git clone <repo>
 cd ORALLMAgent2
 cp .env.example .env
 ```
-Edit `.env` with your local LLM endpoint and credentials.
+Edit `.env` with your local LLM endpoint, API credentials, etc.
 ```
-# Linux / WSL
+# Linux / WSL / macOS
 bash scripts/setup_linux.sh
 
 # Windows PowerShell
 powershell -ExecutionPolicy Bypass -File scripts/setup_windows.ps1
 ```
 
-### 2. Run CLI / CLI 実行
-```
-python main.py "write a haiku about the sky"
-```
-Example commands / 例:
-```
-!websearch 富士山
-!amazon "wireless mouse"
-!twitter "post hello world"
-```
-
-### 3. Run REST API / REST API 実行
+### 2. Run REST API / REST API 実行
 ```
 python main.py --api
 ```
-Then send a request / その後リクエスト:
+API docs available at `http://localhost:8001/docs`.
+
+### 3. Run CLI / CLI 実行
 ```
-curl -X POST http://localhost:8001/api/task -H "Content-Type: application/json" -d '{"instruction": "tell me a joke"}'
+python main.py "write a haiku about the sky"
+```
+
+## API Authentication / API 認証
+1. Request a token / トークン取得:
+```bash
+curl -X POST -H "Content-Type: application/x-www-form-urlencoded" \
+     -d "username=admin&password=change_me" \
+     -c cookie.txt \
+     http://localhost:8001/token -D -
+```
+The response header `X-CSRF-Token` and the JWT in JSON should be used for subsequent requests.
+2. Call secured endpoint / 認証付きエンドポイント呼び出し:
+```bash
+curl -X POST http://localhost:8001/api/task \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer <ACCESS_TOKEN>" \
+     -H "X-CSRF-Token: <CSRF_TOKEN>" \
+     -b cookie.txt \
+     -d '{"instruction": "tell me a joke"}'
+```
+
+## Example Clients
+### JavaScript (fetch)
+```javascript
+// Login and get token
+const loginRes = await fetch('http://localhost:8001/token', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+  body: new URLSearchParams({username: 'admin', password: 'change_me'})
+});
+const csrfToken = loginRes.headers.get('X-CSRF-Token');
+const {access_token} = await loginRes.json();
+
+// Send task
+await fetch('http://localhost:8001/api/task', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${access_token}`,
+    'X-CSRF-Token': csrfToken
+  },
+  credentials: 'include',
+  body: JSON.stringify({instruction: 'write a poem'})
+});
+```
+
+### Swift (URLSession)
+```swift
+struct Token: Decodable { let access_token: String }
+
+// Login
+var req = URLRequest(url: URL(string: "http://localhost:8001/token")!)
+req.httpMethod = "POST"
+req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+req.httpBody = "username=admin&password=change_me".data(using: .utf8)
+let (data, resp) = try await URLSession.shared.data(for: req)
+let csrf = (resp as? HTTPURLResponse)?.value(forHTTPHeaderField: "X-CSRF-Token") ?? ""
+let token = try JSONDecoder().decode(Token.self, from: data).access_token
+
+// Send task
+var taskReq = URLRequest(url: URL(string: "http://localhost:8001/api/task")!)
+taskReq.httpMethod = "POST"
+taskReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+taskReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+taskReq.setValue(csrf, forHTTPHeaderField: "X-CSRF-Token")
+let payload = try JSONSerialization.data(withJSONObject: ["instruction": "hello"], options: [])
+taskReq.httpBody = payload
+let (_, _) = try await URLSession.shared.data(for: taskReq)
 ```
 
 ## Directory Structure / ディレクトリ構成
@@ -66,4 +122,3 @@ curl -X POST http://localhost:8001/api/task -H "Content-Type: application/json" 
 
 ## License / ライセンス
 MIT License
-
