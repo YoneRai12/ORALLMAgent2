@@ -1,6 +1,6 @@
 """Dashboard related utilities."""
 
-from .server import dashboard_router
+from .server import dashboard_router, set_state
 
-__all__ = ["dashboard_router"]
+__all__ = ["dashboard_router", "set_state"]
 

@@ -15,6 +15,9 @@ This project provides a scaffold for building a Manus-style autonomous AI agent.
 - Multi-user chat and task control / マルチユーザーチャットとタスク制御
 - Sub-agent management via API / API からのサブエージェント管理
 - Plugin & workflow scaffolds for extensibility / プラグイン・ワークフロー拡張の雛形
+- Session manager with persistent logs & replay / セッション管理とログ保存・リプレイ
+- Plugin auto-loader for drop-in tools / 追加ツール用プラグインオートローダー
+- Dashboard endpoint to monitor agents and sessions / エージェント・セッション監視用ダッシュボード
 - Dashboard and architecture docs / ダッシュボードおよびアーキテクチャ文書
   (see `docs/architecture.md`)
 
@@ -52,17 +55,25 @@ API docs available at `http://localhost:8001/docs`.
 python main.py "write a haiku about the sky"
 ```
 
-### 4. Start browser session & view stream / ブラウザセッション開始とストリーム視聴
-1. Start session / セッション開始:
+### 4. Start session & browser stream / セッション開始とブラウザストリーム
+1. Create session / セッション作成:
    ```bash
-   curl -X POST http://localhost:8001/browser/start \
+   curl -X POST http://localhost:8001/sessions \
+        -H "Authorization: Bearer <ACCESS_TOKEN>" \
+        -H "X-CSRF-Token: <CSRF_TOKEN>" \
+        -b cookie.txt \
+        -d '{"profile": "default"}'
+   ```
+   Response contains `session_id` and `agent_id`.
+2. Start browser / ブラウザ起動:
+   ```bash
+   curl -X POST http://localhost:8001/sessions/<session_id>/browser/start \
         -H "Authorization: Bearer <ACCESS_TOKEN>" \
         -H "X-CSRF-Token: <CSRF_TOKEN>" \
         -b cookie.txt \
         -d '{"url": "https://example.com"}'
    ```
-   Response contains `session_id`.
-2. Connect via WebSocket / WebSocket で接続:
+3. Connect via WebSocket / WebSocket で接続:
    ```javascript
    const ws = new WebSocket('ws://localhost:8001/ws/session/<session_id>');
    ws.onmessage = ev => {
@@ -70,9 +81,9 @@ python main.py "write a haiku about the sky"
      img.src = `data:image/png;base64,${ev.data}`;
    };
    ```
-3. Control session / セッション制御:
+4. Control session / セッション制御:
    ```bash
-   curl -X POST http://localhost:8001/browser/<session_id>/command \
+   curl -X POST http://localhost:8001/sessions/<session_id>/browser/command \
         -H "Authorization: Bearer <ACCESS_TOKEN>" \
         -H "X-CSRF-Token: <CSRF_TOKEN>" \
         -b cookie.txt \
@@ -180,7 +191,10 @@ ws.resume()
 - `main.py` : CLI & API entry point / CLI & API エントリーポイント
 - `agent/` : Core planning/execution scaffolding / 計画・実行の核となる雛形
 - `tools/` : Tool implementations (web search, browser automation, etc.) / ツール実装
-- `sessions/` : Saved screenshots for browser sessions (gitignored) / ブラウザセッションのスクリーンショット保存先（Git 追跡外）
+- `sessions/` : Session management code / セッション管理コード
+- `logs/` : Action logs & replay utilities / 行動ログとリプレイユーティリティ
+- `plugins/` : Drop-in extension modules / 拡張モジュール
+- `session_data/` : Runtime session storage (gitignored) / 実行時セッション保存先（Git 管理外）
 - `prompts/` : Prompt templates / プロンプトテンプレート
 - `scripts/` : Environment setup scripts / 環境構築スクリプト
 

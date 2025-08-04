@@ -31,9 +31,10 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from fastapi_csrf_protect import CsrfProtect
 
-from tools.browser_session import BrowserSession
 from agent import AgentManager
-from dashboard import dashboard_router
+from dashboard import dashboard_router, set_state
+from sessions.manager import SessionManager
+from plugins import load_plugins
 
 # Load environment variables from .env if present
 load_dotenv()
@@ -42,10 +43,12 @@ app = FastAPI(title="Manus Agent", description="Autonomous AI agent scaffold")
 app.include_router(dashboard_router)
 
 # Directory for storing session artifacts
-SESSION_DIR = Path(os.getenv("SESSION_DIR", "sessions"))
+SESSION_DIR = Path(os.getenv("SESSION_DIR", "session_data"))
 SESSION_DIR.mkdir(parents=True, exist_ok=True)
-browser_sessions: Dict[str, BrowserSession] = {}
+session_manager = SessionManager(SESSION_DIR)
 agent_manager = AgentManager(max_agents=int(os.getenv("MAX_AGENTS", "5")))
+set_state(agent_manager, session_manager)
+loaded_plugins = load_plugins(app)
 chat_rooms: Dict[str, set[WebSocket]] = {}
 
 # --- CORS ---
@@ -119,6 +122,11 @@ class AgentCreateRequest(BaseModel):
     """Create a new sub-agent with optional profile."""
     profile: str = "default"
 
+
+class SessionCreateRequest(BaseModel):
+    """Request body for creating a new user session."""
+    profile: str = "default"
+
 # --- Utility ---
 def call_llm(prompt: str) -> str:
     """Call the configured LLM server and return the generated text."""
@@ -185,52 +193,89 @@ async def agent_task_endpoint(agent_id: str, req: TaskRequest, user: str = Depen
     return {"plan": plan, "result": result}
 
 
+# --- Session Endpoints ---
+@app.post("/sessions")
+async def create_session_endpoint(req: SessionCreateRequest, user: str = Depends(get_current_user)) -> dict:
+    agent_id = agent_manager.create_agent(req.profile)
+    session = session_manager.create(agent_id)
+    agent = agent_manager.get(agent_id)
+    if agent and session.log:
+        agent.logger = session.log
+    return {"session_id": session.session_id, "agent_id": agent_id}
+
+
+@app.get("/sessions")
+async def list_sessions_endpoint(user: str = Depends(get_current_user)) -> dict:
+    return session_manager.list()
+
+
+@app.post("/sessions/{session_id}/save")
+async def save_session_endpoint(session_id: str, user: str = Depends(get_current_user)) -> dict:
+    session_manager.save(session_id)
+    return {"status": "saved"}
+
+
+@app.post("/sessions/{session_id}/load")
+async def load_session_endpoint(session_id: str, user: str = Depends(get_current_user)) -> dict:
+    session_manager.load(session_id)
+    return {"status": "loaded"}
+
+
+@app.get("/sessions/{session_id}/log")
+async def download_log_endpoint(session_id: str, user: str = Depends(get_current_user)) -> FileResponse:
+    session = session_manager.get(session_id)
+    if session is None or session.log is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return FileResponse(session.log.path, filename="actions.log")
+
+
 # --- Browser Session Endpoints ---
-@app.post("/browser/start")
-async def start_browser(req: BrowserStartRequest, user: str = Depends(get_current_user)) -> dict:
-    """Launch a new browser session and navigate to the given URL."""
-    session_id = str(uuid.uuid4())
-    session = BrowserSession(session_id, SESSION_DIR)
-    browser_sessions[session_id] = session
-    await session.start(req.url)
-    return {"session_id": session_id}
-
-
-@app.post("/browser/{session_id}/command")
-async def control_browser(session_id: str, cmd: BrowserCommand, user: str = Depends(get_current_user)) -> dict:
-    """Control an existing browser session (pause/resume/step)."""
-    session = browser_sessions.get(session_id)
+@app.post("/sessions/{session_id}/browser/start")
+async def start_browser(session_id: str, req: BrowserStartRequest, user: str = Depends(get_current_user)) -> dict:
+    """Launch browser for an existing session and navigate to the given URL."""
+    session = session_manager.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    assert session.browser is not None
+    await session.browser.start(req.url)
+    return {"status": "started"}
+
+
+@app.post("/sessions/{session_id}/browser/command")
+async def control_browser(session_id: str, cmd: BrowserCommand, user: str = Depends(get_current_user)) -> dict:
+    """Control an existing browser session (pause/resume/step)."""
+    session = session_manager.get(session_id)
+    if session is None or session.browser is None:
+        raise HTTPException(status_code=404, detail="session not found")
     if cmd.action == "pause":
-        session.pause()
+        session.browser.pause()
     elif cmd.action == "resume":
-        session.resume()
+        session.browser.resume()
     elif cmd.action == "step":
-        await session.step()
+        await session.browser.step()
     else:
         raise HTTPException(status_code=400, detail="unknown action")
     return {"status": "ok"}
 
 
-@app.get("/browser/{session_id}/download")
+@app.get("/sessions/{session_id}/browser/download")
 async def download_session(session_id: str, user: str = Depends(get_current_user)) -> FileResponse:
     """Download screenshots for a session as a ZIP archive."""
-    session = browser_sessions.get(session_id)
-    if session is None:
+    session = session_manager.get(session_id)
+    if session is None or session.browser is None:
         raise HTTPException(status_code=404, detail="session not found")
-    zip_path = shutil.make_archive(str(session.save_dir), "zip", root_dir=session.save_dir)
+    zip_path = shutil.make_archive(str(session.browser.save_dir), "zip", root_dir=session.browser.save_dir)
     return FileResponse(zip_path, filename=f"{session_id}.zip")
 
 
 @app.websocket("/ws/session/{session_id}")
 async def session_stream(websocket: WebSocket, session_id: str) -> None:
     """Stream base64-encoded screenshots over WebSocket."""
-    session = browser_sessions.get(session_id)
-    if session is None:
+    session = session_manager.get(session_id)
+    if session is None or session.browser is None:
         await websocket.close(code=1008)
         return
-    queue = session.register()
+    queue = session.browser.register()
     await websocket.accept()
     try:
         while True:
@@ -239,7 +284,7 @@ async def session_stream(websocket: WebSocket, session_id: str) -> None:
     except WebSocketDisconnect:
         pass
     finally:
-        session.unregister(queue)
+        session.browser.unregister(queue)
 
 
 @app.websocket("/ws/chat/{room}")

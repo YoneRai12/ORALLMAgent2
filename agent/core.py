@@ -7,11 +7,13 @@ implementation of tool execution and reflection is left for future work.
 from __future__ import annotations
 
 import os
-from typing import List
+from typing import Callable, Dict, List
 
 from dotenv import load_dotenv
 
+# Tools are injected via plugin system; ``web_search`` is provided as default
 from tools import web_search
+from logs.recorder import ActionRecorder
 
 # Load environment variables when imported
 load_dotenv()
@@ -26,8 +28,12 @@ class Agent:
         Agent name used for logging.
     """
 
-    def __init__(self, name: str = "agent") -> None:
+    def __init__(self, name: str = "agent", tools: Dict[str, Callable] | None = None, logger: "ActionRecorder" | None = None) -> None:
         self.name = name
+        self.tools = {"web_search": web_search.search}
+        if tools:
+            self.tools.update(tools)
+        self.logger = logger
 
     def plan(self, instruction: str) -> str:
         """Generate a plan using the configured LLM server."""
@@ -44,6 +50,9 @@ class Agent:
         """
 
         results = []
-        if "web_search" in plan:
-            results.append(web_search.search("example query"))
+        for tool_name, tool_fn in self.tools.items():
+            if tool_name in plan:
+                if self.logger:
+                    self.logger.log("tool_call", {"tool": tool_name})
+                results.append(tool_fn("example query"))
         return results
