@@ -33,15 +33,19 @@ from fastapi_csrf_protect import CsrfProtect
 
 from agent import AgentManager
 from dashboard import dashboard_router, set_state
+from api import router as api_router, set_managers as set_api_managers
 from sessions.manager import SessionManager
 from plugins import load_plugins
 from users import UserManager
+from auth.router import router as auth_router
 
 # Load environment variables from .env if present
 load_dotenv()
 
 app = FastAPI(title="Manus Agent", description="Autonomous AI agent scaffold")
 app.include_router(dashboard_router)
+app.include_router(auth_router)
+app.include_router(api_router)
 
 # Directory for storing session artifacts
 SESSION_DIR = Path(os.getenv("SESSION_DIR", "session_data"))
@@ -51,6 +55,8 @@ API_PASSWORD = os.getenv("API_PASSWORD", "change_me")
 session_manager = SessionManager(SESSION_DIR)
 agent_manager = AgentManager(max_agents=int(os.getenv("MAX_AGENTS", "5")))
 user_db = UserManager(Path(os.getenv("USER_DB", "data/users.json")))
+# make managers available to API router
+set_api_managers(agent_manager, session_manager)
 # initialise default admin user if credentials provided
 if not user_db.user_exists(API_USER):
     try:

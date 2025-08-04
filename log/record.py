@@ -1,6 +1,5 @@
+"""Simple JSON lines event recorder."""
 from __future__ import annotations
-
-"""Action logging utilities."""
 
 import json
 import time
@@ -9,7 +8,7 @@ from typing import Any, Dict
 
 
 class ActionRecorder:
-    """Append structured action logs to a file."""
+    """Append structured action events to a log file."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -20,3 +19,4 @@ class ActionRecorder:
         with self.path.open("a", encoding="utf-8") as f:
             json.dump(entry, f, ensure_ascii=False)
             f.write("\n")
+

@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 # Tools are injected via plugin system; ``web_search`` is provided as default
 from tools import web_search
-from logs.recorder import ActionRecorder
+from log.record import ActionRecorder
 
 # Load environment variables when imported
 load_dotenv()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 Each session holds chat history, associated agent and browser automation
 state. Sessions can be serialised to JSON for persistence and later
-reloaded. Logging of actions is delegated to :class:`~logs.recorder.ActionRecorder`.
+reloaded. Logging of actions is delegated to :class:`~log.record.ActionRecorder`.
 """
 
 from dataclasses import dataclass, field
@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from tools.browser_session import BrowserSession
-from logs.recorder import ActionRecorder
+from log.record import ActionRecorder
 
 
 @dataclass
