@@ -158,6 +158,11 @@ curl -OJ -H "Authorization: Bearer <TOKEN>" \\
      http://localhost:8000/api/download/<filename>
 ```
 
+## Windows Quick-Start Troubleshooting / Windows クイックスタートトラブルシューティング
+- Install `bcrypt==4.0.1` to avoid passlib conflicts / `passlib` の衝突を避けるため `bcrypt==4.0.1` をインストールしてください。
+- During local development set `CSRF_DISABLE=true` in `.env` to bypass CSRF on docs / ローカル開発時は `.env` に `CSRF_DISABLE=true` を設定してドキュメントの CSRF を無効化します。
+- Save `.env` in UTF-8 without BOM to prevent `UnicodeDecodeError` / `.env` は UTF-8 (BOM なし) で保存し、`UnicodeDecodeError` を防止してください。
+
 
 ## API Authentication / API 認証
 1. Sign up / サインアップ:
