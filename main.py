@@ -14,6 +14,7 @@ import os
 import time
 import uuid
 import shutil
+import shlex
 from pathlib import Path
 from typing import Dict, List
 
@@ -27,7 +28,7 @@ from urllib.parse import urlparse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import FileResponse, JSONResponse
 from jose import JWTError, jwt
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from slowapi import _rate_limit_exceeded_handler
 from fastapi_csrf_protect import CsrfProtect
 from limiter import limiter
@@ -39,6 +40,7 @@ from sessions.manager import SessionManager
 from plugins import load_plugins
 from users import UserManager
 from auth.router import router as auth_router
+from agent.parsers import parse_kv_pairs
 
 # Load environment variables from .env if present
 load_dotenv()
@@ -127,8 +129,17 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> str:
 
 # --- Models ---
 class TaskRequest(BaseModel):
-    """Schema for REST API task requests."""
-    instruction: str
+    """Schema for REST API task requests.
+
+    Supports both free-form ``instruction`` and structured Amazon purchases via
+    the ``amazon_buy`` task.
+    """
+
+    instruction: str | None = None
+    task: str | None = None
+    item: str | None = None
+    email: str | None = None
+    password: str | None = Field(default=None, alias="pass")
 
 
 class BrowserStartRequest(BaseModel):
@@ -174,6 +185,22 @@ def call_llm(prompt: str) -> str:
     data = response.json()
     return data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
+
+def parse_amazon_command(cmd: str) -> Dict[str, str | None]:
+    """Parse ``!amazon buy`` commands with inline credentials."""
+
+    kv, sanitized = parse_kv_pairs(cmd)
+    tokens = shlex.split(sanitized)
+    if len(tokens) < 3 or tokens[0] != "!amazon" or tokens[1] != "buy":
+        raise ValueError("unsupported command")
+    item = " ".join(tokens[2:])
+    return {
+        "task": "amazon_buy",
+        "item": item,
+        "email": kv.get("email"),
+        "pass": kv.get("pass"),
+    }
+
 # --- API Endpoints ---
 @app.post("/token")
 @limiter.limit("5/minute")
@@ -203,7 +230,11 @@ async def status_endpoint() -> dict:
 @limiter.limit("5/minute")
 async def run_task(request: Request, req: TaskRequest, csrf_protect: CsrfProtect = Depends(), user: str = Depends(get_current_user)) -> dict:
     csrf_protect.validate_csrf(request)
-    plan = call_llm(f"Create a plan for the following task and return JSON steps: {req.instruction}")
+    if req.task == "amazon_buy":
+        # Inline credentials are accepted but not returned in the response
+        return {"task": req.task, "item": req.item, "user": user}
+    instruction = req.instruction or ""
+    plan = call_llm(f"Create a plan for the following task and return JSON steps: {instruction}")
     return {"plan": plan, "user": user}
 
 
@@ -391,6 +422,10 @@ async def chat_stream(websocket: WebSocket, room: str) -> None:
 def cli_mode(args: List[str]) -> None:
     """Run the agent in CLI mode."""
     instruction = " ".join(args) if args else input("Instruction: ")
+    if instruction.startswith("!amazon"):
+        parsed = parse_amazon_command(instruction)
+        print(parsed)
+        return
     plan = call_llm(f"Create a plan for the following task and return JSON steps: {instruction}")
     print("Plan:\n", plan)
     # Placeholder: execute the plan step-by-step and provide reflections.
